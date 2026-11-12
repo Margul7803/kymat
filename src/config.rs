@@ -1,7 +1,17 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayMode {
+    #[default]
+    Lyrics,
+    #[serde(alias = "wave")]
+    #[value(alias = "wave")]
+    Soundwave,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -21,6 +31,10 @@ pub struct CliArgs {
     #[arg(long)]
     pub font_size: Option<u16>,
 
+    /// Default display mode: "lyrics" or "soundwave" (overrides config.toml)
+    #[arg(long)]
+    pub mode: Option<DisplayMode>,
+
     /// Show live FPS and frame time counter in the top-right corner
     #[arg(long)]
     pub debug_fps: bool,
@@ -31,13 +45,14 @@ pub struct CliArgs {
 pub struct AppConfig {
     pub fps: u32,
     pub font_size: u16,
+    pub default_mode: DisplayMode,
+    pub rat_easter_egg: bool,
     pub audio_sensitivity: f32,
     pub attack_lambda: f32,
     pub decay_lambda: f32,
     pub background_transition_secs: f32,
     pub layout_transition_secs: f32,
     pub auto_lyrics_split: bool,
-    pub rat_easter_egg: bool,
 }
 
 impl Default for AppConfig {
@@ -45,13 +60,14 @@ impl Default for AppConfig {
         Self {
             fps: 144,
             font_size: 12,
+            default_mode: DisplayMode::Lyrics,
+            rat_easter_egg: false,
             audio_sensitivity: 1.15,
             attack_lambda: 35.0,
             decay_lambda: 12.0,
             background_transition_secs: 1.5,
             layout_transition_secs: 0.6,
             auto_lyrics_split: true,
-            rat_easter_egg: true,
         }
     }
 }
@@ -68,8 +84,10 @@ impl AppConfig {
             }
         }
 
+        let mut raw_text = String::new();
         let mut cfg = cfg_path
             .and_then(|p| fs::read_to_string(p).ok())
+            .inspect(|raw| raw_text.clone_from(raw))
             .and_then(|raw| toml::from_str::<AppConfig>(&raw).ok())
             .unwrap_or_default();
 
@@ -80,6 +98,16 @@ impl AppConfig {
             cfg.font_size = font_size.clamp(6, 48);
         } else {
             cfg.font_size = cfg.font_size.clamp(6, 48);
+        }
+        if let Some(mode) = cli.mode {
+            cfg.default_mode = mode;
+        }
+
+        // Apply `default_mode` ("lyrics" vs "soundwave") unless only legacy `auto_lyrics_split = false` was set
+        if cfg.default_mode == DisplayMode::Soundwave {
+            cfg.auto_lyrics_split = false;
+        } else if raw_text.contains("default_mode") || cli.mode.is_some() {
+            cfg.auto_lyrics_split = true;
         }
 
         cfg.sync_foot_config();
@@ -114,13 +142,15 @@ impl AppConfig {
     fn default_toml_template() -> &'static str {
         r#"fps = 144
 font_size = 12
+# Default view mode: "lyrics" or "soundwave"
+default_mode = "lyrics"
+# Automatically show the dancing rat easter egg during musical climaxes (can always be toggled with 'r')
+rat_easter_egg = false
 audio_sensitivity = 1.15
 attack_lambda = 35.0
 decay_lambda = 12.0
 background_transition_secs = 1.5
 layout_transition_secs = 0.6
-auto_lyrics_split = true
-rat_easter_egg = true
 "#
     }
 }
@@ -135,11 +165,15 @@ mod tests {
             screensaver: true,
             fps: Some(120),
             font_size: Some(12),
+            mode: Some(DisplayMode::Soundwave),
             debug_fps: false,
         };
         let cfg = AppConfig::load(&cli);
         assert_eq!(cfg.fps, 120);
         assert_eq!(cfg.font_size, 12);
+        assert_eq!(cfg.default_mode, DisplayMode::Soundwave);
+        assert!(!cfg.auto_lyrics_split);
+        assert!(!AppConfig::default().rat_easter_egg);
         assert!((cfg.attack_lambda - 35.0).abs() < f32::EPSILON);
         assert!((cfg.decay_lambda - 12.0).abs() < f32::EPSILON);
     }

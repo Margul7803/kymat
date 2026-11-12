@@ -86,13 +86,13 @@ Optional settings can be customized in `~/.config/kymat/config.toml`:
 ```toml
 fps = 144
 font_size = 12
+default_mode = "lyrics" # "lyrics" or "soundwave"
+rat_easter_egg = false
 audio_sensitivity = 1.15
 attack_lambda = 35.0
 decay_lambda = 12.0
 background_transition_secs = 1.5
 layout_transition_secs = 0.6
-auto_lyrics_split = true
-rat_easter_egg = true
 ```
 
 ## License
