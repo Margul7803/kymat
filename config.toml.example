@@ -1,0 +1,20 @@
+# Configuration d'exemple pour Kymat (~/.config/kymat/config.toml)
+
+# Fréquence de rafraîchissement cible (en Hz / FPS)
+fps = 144
+
+# Sensibilité / gain du visualiseur audio (1.0 par défaut)
+audio_sensitivity = 1.15
+
+# Constantes de lissage temporel de l'onde sonore
+attack_lambda = 35.0
+decay_lambda = 12.0
+
+# Durée (en secondes) de l'interpolation Oklab du fond lors d'un changement de piste
+background_transition_secs = 1.5
+
+# Durée (en secondes) de la transition de layout Vue 1 <-> Vue 2 (Split Lyrics)
+layout_transition_secs = 0.6
+
+# Activer automatiquement la vue divisée dès que des paroles synchronisées sont disponibles
+auto_lyrics_split = true

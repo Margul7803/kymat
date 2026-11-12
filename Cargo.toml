@@ -1,0 +1,38 @@
+[package]
+name = "kymat"
+version = "0.1.0"
+edition = "2021"
+description = "High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Margul7803/kymat"
+readme = "README.md"
+keywords = ["screensaver", "tui", "wayland", "hyprland", "mpris"]
+categories = ["command-line-utilities", "multimedia::audio", "visualization"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+color-thief = "0.2"
+crossterm = "0.28"
+dirs = "5.0"
+futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+libpulse-binding = "2.28"
+libpulse-simple-binding = "2.28"
+palette = { version = "0.7", default-features = false, features = ["std", "approx"] }
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustfft = "6.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "time"] }
+toml = "0.8"
+urlencoding = "2.1"
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

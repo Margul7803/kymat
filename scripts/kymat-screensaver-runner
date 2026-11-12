@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Run Kymat as the Omarchy secondary monitor screensaver, synced with the primary screensaver lifecycle.
+
+screensaver_in_focus() {
+  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+}
+
+exit_screensaver() {
+  [[ -n $WATCHER_PID ]] && kill "$WATCHER_PID" 2>/dev/null
+  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
+  pkill -x ttfx 2>/dev/null
+  pkill -f '[k]ymat --screensaver' 2>/dev/null
+  pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+  exit 0
+}
+
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+printf '\033]11;rgb:05/05/08\007'
+stty -echo 2>/dev/null
+
+hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
+
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 2))
+  while ((SECONDS < deadline)) && [[ $(stty size 2>/dev/null) == "24 80" ]]; do
+    sleep 0.02
+  done
+}
+
+wait_for_terminal_resize
+
+# Watch focus in background so losing focus on any monitor exits both screensavers
+(
+  sleep 2
+  while true; do
+    if ! screensaver_in_focus; then
+      pkill -f '[k]ymat --screensaver' 2>/dev/null
+      exit 0
+    fi
+    sleep 1
+  done
+) &
+WATCHER_PID=$!
+
+# Run kymat in foreground so it owns the TTY for raw mode and keyboard/mouse wake events
+"$HOME/.local/bin/kymat" --screensaver --fps 144
+
+exit_screensaver
