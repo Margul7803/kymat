@@ -15,7 +15,7 @@ pub struct FftAnalyzer {
     scratch: Vec<Complex<f32>>,
     band_edges: Vec<(usize, usize)>,
     band_weights: Vec<f32>,
-    /// Auto-Gain Control (AGC) rolling peak envelope for volume-independent normalization
+    /// Volume-independent spectral peak follower
     rolling_peak: f32,
 }
 
@@ -61,28 +61,34 @@ impl FftAnalyzer {
             scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             band_edges,
             band_weights,
-            rolling_peak: 0.05,
+            rolling_peak: 0.25,
         }
     }
 
     pub fn push_samples(&mut self, samples: &[f32], sensitivity: f32) -> [f32; NUM_BANDS] {
-        let mut rms_acc = 0.0_f32;
         for &s in samples {
             let clean = if s.is_finite() { s } else { 0.0 };
-            rms_acc += clean * clean;
             self.ring_buf[self.write_pos] = clean;
             self.write_pos = (self.write_pos + 1) % FFT_SIZE;
         }
-        let rms = (rms_acc / (samples.len().max(1) as f32)).sqrt();
 
-        // If the stream is strictly silent (< -75 dB), return zero immediately
-        if rms < 1.5e-4 {
+        // Pre-FFT window peak normalization: cancels out system volume scalar G completely
+        // so that 1% volume and 100% volume produce the exact same normalized waveform into the FFT.
+        let mut window_peak = 0.0_f32;
+        for &s in &self.ring_buf {
+            window_peak = window_peak.max(s.abs());
+        }
+
+        // True digital silence (< -110 dB) returns zero
+        if window_peak < 3.0e-6 {
             return [0.0; NUM_BANDS];
         }
 
+        let inv_window_peak = 1.0 / window_peak;
         for i in 0..FFT_SIZE {
             let sample_idx = (self.write_pos + i) % FFT_SIZE;
-            let windowed = self.ring_buf[sample_idx] * self.hann_window[i];
+            let normalized = self.ring_buf[sample_idx] * inv_window_peak;
+            let windowed = normalized * self.hann_window[i];
             self.scratch[i] = Complex::new(windowed, 0.0);
         }
 
@@ -105,15 +111,14 @@ impl FftAnalyzer {
             frame_max = frame_max.max(weighted);
         }
 
-        // Update Auto-Gain Control (fast attack, slow decay)
         if frame_max > self.rolling_peak {
-            self.rolling_peak = self.rolling_peak * 0.70 + frame_max * 0.30;
+            self.rolling_peak = self.rolling_peak * 0.65 + frame_max * 0.35;
         } else {
-            self.rolling_peak = (self.rolling_peak * 0.992 + frame_max * 0.008).max(0.004);
+            self.rolling_peak = (self.rolling_peak * 0.96 + frame_max * 0.04).max(1e-4);
         }
 
         let mut bands = [0.0_f32; NUM_BANDS];
-        let ref_peak = self.rolling_peak.max(1e-4);
+        let ref_peak = self.rolling_peak.max(frame_max * 0.85).max(1e-4);
         for i in 0..NUM_BANDS {
             let rel = (raw_bands[i] / ref_peak).clamp(0.0, 1.0);
             bands[i] = rel.powf(0.65);
@@ -158,5 +163,37 @@ mod tests {
             max_band > 0.3,
             "Expected clear peak on 440Hz sine, got {max_band}"
         );
+    }
+
+    #[test]
+    fn test_fft_volume_invariance_low_vs_high_volume() {
+        let mut analyzer_low = FftAnalyzer::new();
+        let mut analyzer_high = FftAnalyzer::new();
+
+        // Same musical signal at 0.5% volume (0.005) vs 95% volume (0.95)
+        let low_vol: Vec<f32> = (0..FFT_SIZE)
+            .map(|n| {
+                let t = (n as f32) / SAMPLE_RATE;
+                ((2.0 * PI * 120.0 * t).sin() + 0.6 * (2.0 * PI * 880.0 * t).sin()) * 0.005
+            })
+            .collect();
+        let high_vol: Vec<f32> = (0..FFT_SIZE)
+            .map(|n| {
+                let t = (n as f32) / SAMPLE_RATE;
+                ((2.0 * PI * 120.0 * t).sin() + 0.6 * (2.0 * PI * 880.0 * t).sin()) * 0.95
+            })
+            .collect();
+
+        let bands_low = analyzer_low.push_samples(&low_vol, 1.15);
+        let bands_high = analyzer_high.push_samples(&high_vol, 1.15);
+
+        for i in 0..NUM_BANDS {
+            assert!(
+                (bands_low[i] - bands_high[i]).abs() < 1e-5,
+                "Band {i} differed between low and high volume: {} vs {}",
+                bands_low[i],
+                bands_high[i]
+            );
+        }
     }
 }

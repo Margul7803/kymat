@@ -21,6 +21,9 @@ const QUADRANT_PATTERNS: [(u8, char); 8] = [
     (0b0111, '▛'),
 ];
 
+/// Default cell height-to-width pixel aspect ratio for JetBrainsMono Nerd Font in Wayland terminals
+const DEFAULT_CELL_ASPECT: f32 = 2.25;
+
 /// Pre-calculated cover art cell avoiding per-frame SDF and quadrant fitting at 144 FPS
 #[derive(Clone, Copy)]
 pub enum CachedCoverCell {
@@ -39,9 +42,22 @@ pub struct ScaledCoverCache {
     cell_w: u16,
     cell_h: u16,
     cells: Vec<CachedCoverCell>,
+    cached_term_dims: (u16, u16),
+    cached_cell_aspect: f32,
 }
 
 impl ScaledCoverCache {
+    /// Queries the terminal's physical pixel dimensions (via `TIOCGWINSZ`) only when the
+    /// cell grid dimensions change, returning the exact cell height/width pixel ratio so
+    /// the album cover renders as a true 1:1 physical square on screen.
+    pub fn cell_aspect_for_area(&mut self, area_w: u16, area_h: u16) -> f32 {
+        if self.cached_term_dims != (area_w, area_h) || self.cached_cell_aspect <= 0.0 {
+            self.cached_term_dims = (area_w, area_h);
+            self.cached_cell_aspect = detect_terminal_cell_aspect();
+        }
+        self.cached_cell_aspect
+    }
+
     pub fn ensure_cells(
         &mut self,
         cover: &CoverArtData,
@@ -64,6 +80,8 @@ impl ScaledCoverCache {
 
             let pw_f = pw as f32;
             let ph_f = ph as f32;
+            // Normalize X into `[0, ph_f]` so rounded corners are circular in physical screen pixels
+            let x_scale = ph_f / pw_f;
             let total_cells = (cell_w as usize) * (cell_h as usize);
             self.cells.clear();
             self.cells.reserve(total_cells);
@@ -83,9 +101,9 @@ impl ScaledCoverCache {
 
                     for (i, &(px, py)) in coords.iter().enumerate() {
                         let cov = rounded_rect_coverage(
-                            px as f32 + 0.5,
+                            (px as f32 + 0.5) * x_scale,
                             py as f32 + 0.5,
-                            pw_f,
+                            ph_f,
                             ph_f,
                             corner_radius,
                         );
@@ -111,6 +129,19 @@ impl ScaledCoverCache {
 
         &self.cells
     }
+}
+
+fn detect_terminal_cell_aspect() -> f32 {
+    if let Ok(win) = crossterm::terminal::window_size() {
+        if win.width > 0 && win.height > 0 && win.columns > 0 && win.rows > 0 {
+            let cell_w = (win.width as f32) / (win.columns as f32);
+            let cell_h = (win.height as f32) / (win.rows as f32);
+            if cell_w > 0.5 && cell_h > 0.5 {
+                return (cell_h / cell_w).clamp(1.85, 2.60);
+            }
+        }
+    }
+    DEFAULT_CELL_ASPECT
 }
 
 /// Metadata view parameters for the cover column renderer
@@ -205,8 +236,9 @@ fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
     (best_ch, best_fg, best_bg)
 }
 
-/// Renders the 2x2 Unicode quadrant album cover, bold title with solid heart icon,
-/// artist name, and (when in split view) the passive progress bar beneath the artist.
+/// Renders the 2x2 Unicode quadrant album cover (true 1:1 physical pixel square),
+/// bold title with solid heart icon, artist name, and (when in split view) the
+/// passive progress bar beneath the artist.
 pub fn render_cover_and_meta(
     area: Rect,
     buf: &mut Buffer,
@@ -224,11 +256,16 @@ pub fn render_cover_and_meta(
     } else {
         3u16
     };
+
+    let cell_aspect = cache.cell_aspect_for_area(area.width, area.height);
     let desired_h = ((area.height as u32 * 52) / 100) as u16;
     let max_cover_h = area.height.saturating_sub(meta_rows + 3).min(38);
-    let max_cover_w = (area.width.saturating_sub(6) / 2) * 2;
-    let cover_h = desired_h.min(max_cover_h).min(max_cover_w / 2).max(6);
-    let cover_w = cover_h * 2;
+    let max_cover_w = area.width.saturating_sub(6);
+    let max_h_from_w = ((max_cover_w as f32) / cell_aspect).floor() as u16;
+    let cover_h = desired_h.min(max_cover_h).min(max_h_from_w).max(6);
+    let cover_w = ((cover_h as f32) * cell_aspect)
+        .round()
+        .clamp(12.0, max_cover_w.max(12) as f32) as u16;
 
     let total_block_h = cover_h + meta_rows;
     let vertical_bias = if meta.show_time_bar_under_artist {
@@ -242,6 +279,7 @@ pub fn render_cover_and_meta(
 
     let pw = (cover_w * 2) as f32;
     let ph = (cover_h * 2) as f32;
+    let x_scale = ph / pw.max(1.0);
     let corner_radius = (ph * 0.045).max(1.8);
 
     if let Some(cover_data) = cover {
@@ -296,9 +334,9 @@ pub fn render_cover_and_meta(
             for cx in 0..cover_w {
                 let screen_x = cover_x + cx;
                 let cov = rounded_rect_coverage(
-                    (cx * 2) as f32 + 0.5,
+                    ((cx * 2) as f32 + 0.5) * x_scale,
                     py_top as f32 + 0.5,
-                    pw,
+                    ph,
                     ph,
                     corner_radius,
                 );
@@ -346,7 +384,7 @@ pub fn render_cover_and_meta(
     // 3. In View 2 (Split Lyrics), the passive time bar sits directly below the artist
     if meta.show_time_bar_under_artist {
         let bar_y = artist_y + 2;
-        let bar_w = cover_w.saturating_sub(2).clamp(18, 34);
+        let bar_w = cover_w.saturating_sub(4).clamp(18, 36);
         if bar_y < area.bottom() && (!meta.duration.is_zero() || !meta.position.is_zero()) {
             let bar_area = Rect::new(area.x, bar_y, area.width, 1);
             render_passive_time_bar(buf, bar_area, bar_w, meta.position, meta.duration, bg);
@@ -585,5 +623,25 @@ mod tests {
         assert_eq!(ch, '▌');
         assert_eq!(fg, (240, 20, 20));
         assert_eq!(bg, (20, 20, 240));
+    }
+
+    #[test]
+    fn test_square_cover_aspect_ratio() {
+        let area = Rect::new(0, 0, 72, 46);
+        let mut buf = Buffer::empty(area);
+        let bg = AmbientBackground::new(1.2);
+        let mut cache = ScaledCoverCache::default();
+        let meta = CoverMetaView {
+            title: "Lover Is a Day",
+            artist: "Cuco",
+            position: Duration::from_secs(102),
+            duration: Duration::from_secs(456),
+            show_time_bar_under_artist: true,
+        };
+
+        render_cover_and_meta(area, &mut buf, &bg, None, &mut cache, &meta);
+
+        // Verify that the cached cell aspect produces a true square (~2.25 cols per row)
+        assert!((cache.cached_cell_aspect - 2.25).abs() < 0.35);
     }
 }
