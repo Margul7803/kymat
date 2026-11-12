@@ -29,7 +29,7 @@ pub struct SyncedLyrics {
 }
 
 impl SyncedLyrics {
-    /// Recherche dichotomique de la ligne active au temps `pos`
+    /// Binary search for the active lyric line at playback time `pos`
     pub fn active_line_index(&self, pos: Duration) -> Option<usize> {
         if self.lines.is_empty() {
             return None;
@@ -42,7 +42,7 @@ impl SyncedLyrics {
     }
 }
 
-// --- Structures JSON du cache SQLite de Sonora ---
+// --- Sonora SQLite JSON schema structures ---
 
 #[derive(Deserialize)]
 struct SonoraLyricsRecord {
@@ -94,7 +94,7 @@ struct SonoraLine {
     words: Vec<SonoraWord>,
 }
 
-/// Extrait la clé SQLite Sonora à partir de `xesam:url` (ex: `https://open.spotify.com/track/<id>` -> `spotify:<id>:lyrics`)
+/// Extracts the Sonora SQLite cache key from `xesam:url` (e.g. `https://open.spotify.com/track/<id>` -> `spotify:<id>:lyrics`)
 pub fn extract_sonora_cache_key(source_url: &str) -> Option<String> {
     if let Some(rest) = source_url.split("open.spotify.com/track/").nth(1) {
         let id = rest.split(['?', '/', '#']).next()?.trim();
@@ -111,7 +111,7 @@ pub fn extract_sonora_cache_key(source_url: &str) -> Option<String> {
     None
 }
 
-/// Parse une entrée JSON de la table `lyrics` de `~/.cache/sonora/cache.sqlite`
+/// Parses a JSON entry from the `lyrics` table in `~/.cache/sonora/cache.sqlite`
 pub fn parse_sonora_lyrics_json(raw_json: &str) -> Option<SyncedLyrics> {
     let record: SonoraLyricsRecord = serde_json::from_str(raw_json).ok()?;
 
@@ -167,7 +167,7 @@ pub fn parse_sonora_lyrics_json(raw_json: &str) -> Option<SyncedLyrics> {
     best_hit.map(|(_, _, synced)| synced)
 }
 
-/// Lit les paroles synchronisées directement depuis `~/.cache/sonora/cache.sqlite` en mode READ_ONLY
+/// Reads synchronized lyrics directly from `~/.cache/sonora/cache.sqlite` in READ_ONLY mode
 pub fn query_sonora_sqlite(db_path: &Path, cache_key: &str) -> Option<SyncedLyrics> {
     if !db_path.exists() {
         return None;
@@ -193,7 +193,7 @@ pub fn default_sonora_db_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("sonora").join("cache.sqlite"))
 }
 
-/// Parse un fichier ou une réponse au format `.lrc` (`[mm:ss.xx] Texte`)
+/// Parses a standard `.lrc` file or response (`[mm:ss.xx] Text`)
 pub fn parse_lrc(lrc_text: &str, source_label: &str) -> Option<SyncedLyrics> {
     let mut lines: Vec<LyricLine> = Vec::new();
 
@@ -251,7 +251,7 @@ struct LrcLibResponse {
     synced_lyrics: Option<String>,
 }
 
-/// Nettoie les suffixes parasites fréquents sur YouTube / YouTube Music (ex: " - Topic", "(Official Video)")
+/// Strips common YouTube / YouTube Music noise suffixes (e.g. " - Topic", "(Official Video)")
 fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
     let clean_artist = artist
         .trim()
@@ -259,7 +259,6 @@ fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
         .unwrap_or(artist.trim())
         .to_string();
 
-    // Si le titre YouTube est de la forme "Artiste - Titre", séparer proprement
     let base_title = if let Some((maybe_art, rest)) = title.split_once(" - ") {
         if clean_artist.is_empty()
             || clean_artist
@@ -274,7 +273,6 @@ fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
         title.trim()
     };
 
-    // Retirer les parenthèses/crochets typiques des clips vidéo YouTube
     let mut cleaned_title = base_title.to_string();
     for noise in [
         "(Official Video)",
@@ -289,10 +287,7 @@ fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
         "(HD)",
         "(4K)",
     ] {
-        if let Some(pos) = cleaned_title
-            .to_lowercase()
-            .find(&noise.to_lowercase())
-        {
+        if let Some(pos) = cleaned_title.to_lowercase().find(&noise.to_lowercase()) {
             cleaned_title.replace_range(pos..pos + noise.len(), "");
         }
     }
@@ -307,7 +302,7 @@ async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<
 
     let (clean_artist, clean_title) = clean_youtube_metadata(&meta.artist, &meta.title);
 
-    // 1. Vérifier le cache disque local `~/.cache/kymat/lyrics/`
+    // 1. Check local disk cache `~/.cache/kymat/lyrics/`
     let safe_name = format!(
         "{}_{}.lrc",
         sanitize_filename(&clean_artist),
@@ -323,7 +318,7 @@ async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<
         }
     }
 
-    // 2. Appel HTTP exact vers https://lrclib.net/api/get
+    // 2. Exact HTTP lookup via https://lrclib.net/api/get
     let mut lrc_raw: Option<String> = None;
     if !clean_artist.is_empty() && !clean_title.is_empty() {
         let mut url = format!(
@@ -345,8 +340,7 @@ async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<
         }
     }
 
-    // 3. Fallback universel `/api/search` (idéal pour YouTube, YouTube Music, Deezer ou navigateur
-    // quand l'album est absent ou que la durée du clip diffère de quelques secondes)
+    // 3. Universal `/api/search` fallback (for YouTube, YouTube Music, Deezer, or browser tabs)
     if lrc_raw.is_none() {
         let query = if clean_artist.is_empty() {
             clean_title.clone()
@@ -380,12 +374,18 @@ async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<
 
 fn sanitize_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .take(48)
         .collect()
 }
 
-/// Worker asynchrone de récupération des paroles (1. Sonora SQLite -> 2. LRCLIB)
+/// Asynchronous lyrics worker (1. Sonora SQLite -> 2. LRCLIB)
 pub fn spawn_lyrics_worker(
     mut meta_rx: watch::Receiver<TrackMetadata>,
 ) -> watch::Receiver<Option<SyncedLyrics>> {
@@ -395,7 +395,7 @@ pub fn spawn_lyrics_worker(
         let mut memory_cache: HashMap<String, Option<SyncedLyrics>> = HashMap::new();
         let sonora_db = default_sonora_db_path();
         let http_client = reqwest::Client::builder()
-            .user_agent("kymat/0.1.0 (https://github.com/omarchy/kymat)")
+            .user_agent("kymat/0.1.0 (https://github.com/Margul7803/kymat)")
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_default();
@@ -413,8 +413,7 @@ pub fn spawn_lyrics_worker(
                     let mut resolved = None;
                     let sonora_key = extract_sonora_cache_key(&meta.source_url);
 
-                    // 1. Lecture prioritaire dans ~/.cache/sonora/cache.sqlite
-                    // (avec jusqu'à 3 tentatives rapides car Sonora écrit dans SQLite ~200-800ms après le skip)
+                    // 1. Primary lookup in `~/.cache/sonora/cache.sqlite`
                     if let (Some(ref db), Some(ref s_key)) = (&sonora_db, &sonora_key) {
                         for attempt in 0..3 {
                             resolved = query_sonora_sqlite(db, s_key);
@@ -427,12 +426,11 @@ pub fn spawn_lyrics_worker(
                         }
                     }
 
-                    // Si l'utilisateur a re-skippé pendant l'attente, passer immédiatement au nouveau titre
                     if meta_rx.has_changed().unwrap_or(false) {
                         continue;
                     }
 
-                    // 2. Fallback vers LRCLIB + dernière vérification Sonora SQLite
+                    // 2. Fallback to LRCLIB + final Sonora SQLite check
                     if resolved.is_none() {
                         resolved = fetch_lrclib(&http_client, &meta).await;
                     }

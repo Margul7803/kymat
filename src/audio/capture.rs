@@ -7,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::watch;
 
-/// Démarre le thread dédié de capture audio temps réel sur `@DEFAULT_MONITOR@`
-/// via `libpulse-simple` (compatible nativement avec `pipewire-pulse`).
+/// Spawns a dedicated real-time audio capture thread listening on `@DEFAULT_MONITOR@`
+/// via `libpulse-simple` (natively supported by `pipewire-pulse`).
 pub fn spawn_audio_capture_thread(sensitivity: f32) -> watch::Receiver<[f32; NUM_BANDS]> {
     let (tx, rx) = watch::channel([0.0_f32; NUM_BANDS]);
 
@@ -45,7 +45,7 @@ pub fn spawn_audio_capture_thread(sensitivity: f32) -> watch::Receiver<[f32; NUM
                     Some(&attr),
                 )
                 .or_else(|_| {
-                    // Fallback sur la source par défaut si @DEFAULT_MONITOR@ n'est pas résolu
+                    // Fallback to the default recording source if @DEFAULT_MONITOR@ is unavailable
                     Simple::new(
                         None,
                         "kymat",

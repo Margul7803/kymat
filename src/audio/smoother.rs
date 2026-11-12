@@ -1,6 +1,6 @@
 use crate::audio::fft::NUM_BANDS;
 
-/// Filtre de lissage temporel exponentiel asymétrique (144 FPS) + Spline de Catmull-Rom
+/// Asymmetric exponential temporal smoother (144 FPS) + Catmull-Rom spline interpolator
 pub struct SpectrumSmoother {
     current: [f32; NUM_BANDS],
     secondary: [f32; NUM_BANDS],
@@ -20,9 +20,9 @@ impl SpectrumSmoother {
         }
     }
 
-    /// Met à jour les bandes principales et secondaires à 144 FPS.
-    /// Si `is_playing` est vrai mais que le haut-parleur / lecteur est en mode Muet (`🔇`),
-    /// génère une onde musicale multi-harmoniques vivante comme dans Sonora (Image 3).
+    /// Updates primary and secondary bands at 144 FPS.
+    /// When `is_playing` is true but audio output is muted, synthesizes a multi-harmonic
+    /// musical wave so the visualizer remains alive.
     pub fn step(&mut self, targets: &[f32; NUM_BANDS], dt: f32, is_playing: bool) {
         let dt = dt.clamp(0.0005, 0.1);
         let speed = if is_playing { 2.8 } else { 0.7 };
@@ -41,7 +41,7 @@ impl SpectrumSmoother {
         for (i, &target_band) in targets.iter().enumerate().take(NUM_BANDS) {
             let x = (i as f32) * inv_max_band;
 
-            // Enveloppe multi-collines organique inspirée de l'onde de Sonora (Image 3)
+            // Organic multi-hill wave envelope
             let hill1 = (x * 16.0 - t * 1.3).sin() * 0.5 + 0.5;
             let hill2 = (x * 29.0 + t * 1.9).sin() * 0.5 + 0.5;
             let hill3 = (x * 9.5 + t * 0.75).cos() * 0.5 + 0.5;
@@ -52,15 +52,11 @@ impl SpectrumSmoother {
 
             let target = if is_playing {
                 if audio_is_silent {
-                    // Musique en lecture mais sortie audio coupée (Mute 🔇) :
-                    // animer l'onde avec de vraies collines dynamiques (15% à 82% de hauteur)
                     (synthetic_wave * 0.82 + 0.08).clamp(0.08, 0.88)
                 } else {
-                    // Vrai signal FFT PipeWire combiné à une légère ondulation de base
                     (target_band * 0.88 + synthetic_wave * 0.16).clamp(0.06, 0.96)
                 }
             } else {
-                // En pause : très douce vague basse au repos
                 (synthetic_wave * 0.18 + 0.04).clamp(0.03, 0.22)
             };
 
@@ -73,7 +69,7 @@ impl SpectrumSmoother {
             let next_val = (prev + (target - prev) * factor).clamp(0.0, 1.0);
             self.current[i] = next_val;
 
-            // Seconde onde déphasée (écho sous-jacent visible sur l'Image 3 de Sonora)
+            // Phase-shifted secondary echo wave
             let sec_target = (next_val * 0.76
                 + ((x * 21.0 + t * 1.1).sin() * 0.5 + 0.5) * sec_wave_amp)
                 .clamp(0.02, 0.85);
@@ -95,7 +91,7 @@ impl SpectrumSmoother {
     }
 }
 
-/// Interpolation par spline de Catmull-Rom sur une grille de taille `out_len`
+/// Evaluates a Catmull-Rom spline across `out_len` sub-columns
 pub fn evaluate_catmull_rom_spline(points: &[f32], out_len: usize, out: &mut Vec<f32>) {
     out.clear();
     if out_len == 0 || points.is_empty() {

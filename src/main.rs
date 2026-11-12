@@ -29,21 +29,15 @@ async fn main() -> Result<()> {
     let cli = CliArgs::parse();
     let config = AppConfig::load(&cli);
 
-    // En mode screensaver sous Hyprland/Wayland, les terminaux (foot/alacritty/ghostty)
-    // démarrent parfois en 80x24 pendant quelques millisecondes avant que le compositeur
-    // n'applique le plein écran. On attend jusqu'à 400ms si la taille est encore 80x24.
+    // Under Hyprland/Wayland, terminals (foot/alacritty/ghostty) briefly spawn at 80x24
+    // for a few milliseconds before the compositor applies fullscreen dimensions.
     if cli.screensaver {
         wait_for_fullscreen_pty_resize();
     }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        Hide,
-        EnableMouseCapture
-    )?;
+    execute!(stdout, EnterAlternateScreen, Hide, EnableMouseCapture)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -51,7 +45,7 @@ async fn main() -> Result<()> {
 
     let run_result = run_event_loop(&mut terminal, config, cli).await;
 
-    // Restauration atomique et inconditionnelle de l'état du terminal
+    // Unconditional atomic terminal state restoration
     let _ = execute!(
         terminal.backend_mut(),
         EndSynchronizedUpdate,
@@ -97,7 +91,7 @@ async fn run_event_loop(
             .clamp(0.0005, 0.1);
         last_frame = frame_start;
 
-        // Lecture non-bloquante de tous les événements terminal en attente
+        // Non-blocking poll of all pending terminal input events
         while event::poll(Duration::ZERO)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -106,7 +100,6 @@ async fn run_event_loop(
                         continue;
                     }
                     if cli.screensaver {
-                        // Mode screensaver passif : toute autre touche ferme immédiatement
                         return Ok(());
                     }
                     match key.code {
@@ -153,7 +146,7 @@ async fn run_event_loop(
         let size = terminal.size()?;
         app.tick(dt, frame_start, size.width, size.height);
 
-        // Rendu atomique avec Synchronized Output (CSI ? 2026 h/l) pour éliminer tout tearing à 144 FPS
+        // Atomic rendering with Synchronized Output (CSI ? 2026 h/l) to eliminate tearing at 144 FPS
         queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
         terminal.draw(|frame| {
             let area = frame.area();

@@ -29,7 +29,7 @@ impl TrackMetadata {
         self.title.is_empty() && self.artist.is_empty()
     }
 
-    /// Clé unique permettant de détecter un changement de piste
+    /// Unique key used to detect track changes
     pub fn cache_key(&self) -> String {
         if !self.source_url.is_empty() {
             self.source_url.clone()
@@ -41,12 +41,12 @@ impl TrackMetadata {
     }
 }
 
-/// Horloge haute précision permettant de calculer la position de lecture à 144 Hz
-/// sans interroger D-Bus à chaque frame.
+/// High-precision playback clock interpolating playback position at 144 Hz
+/// without polling D-Bus on every frame.
 #[derive(Debug, Clone)]
 pub struct PlaybackClock {
     pub base_position: Duration,
-    /// Dernière valeur brute `Position` lue sur D-Bus (permet d'ignorer les lectures doublons quand Sonora ne met à jour Position qu'à 1 Hz)
+    /// Last raw `Position` value read from D-Bus (prevents backward jumps on 1 Hz D-Bus players)
     pub last_raw_dbus_position: Duration,
     pub sync_instant: Instant,
     pub rate: f64,
@@ -68,8 +68,8 @@ impl Default for PlaybackClock {
 }
 
 impl PlaybackClock {
-    /// Calcule la position actuelle interpolée au millième de seconde près :
-    /// t_current = t_mpris_last + (t_now - t_sync) * PlaybackRate
+    /// Computes the interpolated playback position at `now`:
+    /// `t_current = t_mpris_last + (t_now - t_sync) * PlaybackRate`
     pub fn position_at(&self, now: Instant) -> Duration {
         let raw = match self.status {
             PlaybackStatus::Playing => {
@@ -87,12 +87,12 @@ impl PlaybackClock {
         }
     }
 
-    /// Recale l'horloge sur une nouvelle lecture D-Bus de manière strictement monotone :
-    /// - Si la piste est en lecture et que D-Bus renvoie exactement la même valeur brute `Position`
-    ///   qu'au poll précédent (Sonora ne rafraîchit sa propriété D-Bus Position qu'à ~1 Hz),
-    ///   on conserve l'interpolation locale en cours sans revenir en arrière.
-    /// - Si la nouvelle valeur D-Bus accuse un léger retard (< 1.8s) dû au délai de publication MPRIS,
-    ///   on maintient la position prédite pour éviter tout effet d'aller-retour (yo-yo) sur les paroles.
+    /// Reconciles the local clock against a new D-Bus sample monotonically:
+    /// - If the track is playing and D-Bus returns the exact same `Position` as the previous poll
+    ///   (players like Sonora only update their D-Bus Position property at ~1 Hz), keep the local
+    ///   interpolation running smoothly.
+    /// - If the new D-Bus sample lags slightly (< 1.8s) due to MPRIS publishing latency, preserve
+    ///   the predicted position to prevent backward yo-yo jumps in lyrics scrolling.
     pub fn reconcile_dbus_update(
         prev: Option<&PlaybackClock>,
         same_track: bool,
@@ -103,11 +103,12 @@ impl PlaybackClock {
         now: Instant,
     ) -> Self {
         if let Some(prev_clock) = prev {
-            if same_track && prev_clock.status == PlaybackStatus::Playing && new_status == PlaybackStatus::Playing {
+            if same_track
+                && prev_clock.status == PlaybackStatus::Playing
+                && new_status == PlaybackStatus::Playing
+            {
                 let predicted = prev_clock.position_at(now);
 
-                // Cas 1 : Sonora renvoie exactement le même timestamp brut qu'au tick précédent ->
-                // son compteur 1 Hz n'a pas encore avancé, on ne touche surtout pas à l'horloge locale !
                 if new_raw_pos == prev_clock.last_raw_dbus_position
                     && predicted >= new_raw_pos
                     && predicted.saturating_sub(new_raw_pos) < Duration::from_millis(1800)
@@ -122,8 +123,6 @@ impl PlaybackClock {
                     };
                 }
 
-                // Cas 2 : Le nouveau timestamp D-Bus est légèrement derrière notre horloge locale (< 1.8s)
-                // (pas un vrai Seek utilisateur, juste la latence du cache MPRIS) -> ne jamais reculer !
                 if predicted > new_raw_pos
                     && predicted.saturating_sub(new_raw_pos) < Duration::from_millis(1800)
                 {
@@ -157,7 +156,7 @@ pub struct MprisState {
     pub last_active: Option<Instant>,
 }
 
-/// Démarre la tâche asynchrone d'écoute D-Bus MPRIS
+/// Spawns the asynchronous D-Bus MPRIS listener task
 pub fn spawn_mpris_watcher() -> watch::Receiver<MprisState> {
     let (tx, rx) = watch::channel(MprisState::default());
 
@@ -166,7 +165,6 @@ pub fn spawn_mpris_watcher() -> watch::Receiver<MprisState> {
             return;
         };
 
-        // Écoute des signaux PropertiesChanged et Seeked sur /org/mpris/MediaPlayer2
         let props_rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .path("/org/mpris/MediaPlayer2")
@@ -193,7 +191,7 @@ pub fn spawn_mpris_watcher() -> watch::Receiver<MprisState> {
             None
         };
 
-        // Synchronisation initiale immédiate
+        // Initial immediate query
         if let Some(state) = query_best_player(&conn, None).await {
             let _ = tx.send(state);
         }
@@ -252,14 +250,8 @@ async fn query_best_player(
         return Some(MprisState::default());
     }
 
-    // Prioriser Sonora en tête de liste
-    mpris_names.sort_by_key(|name| {
-        if name.contains("sonora") {
-            0
-        } else {
-            1
-        }
-    });
+    // Prioritize Sonora at the front of the candidate list
+    mpris_names.sort_by_key(|name| if name.contains("sonora") { 0 } else { 1 });
 
     let mut best_candidate: Option<MprisState> = None;
 
@@ -336,9 +328,7 @@ async fn read_player_state(
     };
 
     let same_track = prev_state
-        .map(|prev| {
-            !prev.metadata.is_empty() && prev.metadata.cache_key() == metadata.cache_key()
-        })
+        .map(|prev| !prev.metadata.is_empty() && prev.metadata.cache_key() == metadata.cache_key())
         .unwrap_or(false);
 
     let clock = PlaybackClock::reconcile_dbus_update(
@@ -468,11 +458,9 @@ mod tests {
             duration: Duration::from_secs(180),
         };
 
-        // 500ms plus tard à rate = 1.0 -> 15.500s
         let pos = clock.position_at(t0 + Duration::from_millis(500));
         assert_eq!(pos, Duration::from_millis(15_500));
 
-        // Ne dépasse jamais la durée totale de la piste
         let clamped = clock.position_at(t0 + Duration::from_secs(300));
         assert_eq!(clamped, Duration::from_secs(180));
     }
@@ -498,7 +486,6 @@ mod tests {
         let t0 = Instant::now();
         let dur = Duration::from_secs(240);
 
-        // Tick 1 (t = 0.0s) : Sonora annonce 174.188s
         let c1 = PlaybackClock::reconcile_dbus_update(
             None,
             true,
@@ -509,8 +496,6 @@ mod tests {
             t0,
         );
 
-        // À t = 0.50s, notre horloge locale vaut 174.688s.
-        // Sonora est ré-interrogé à t = 0.50s mais renvoie ENCORE 174.188s (car son compteur est à 1 Hz).
         let t1 = t0 + Duration::from_millis(500);
         let pos_before_poll = c1.position_at(t1);
         assert_eq!(pos_before_poll, Duration::from_millis(174_688));
@@ -525,7 +510,6 @@ mod tests {
             t1,
         );
         let pos_after_poll = c2.position_at(t1);
-        // L'horloge ne doit SURTOUT PAS reculer à 174.188s !
         assert_eq!(pos_after_poll, Duration::from_millis(174_688));
     }
 

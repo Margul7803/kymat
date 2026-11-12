@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::time::Duration;
 
-/// Table des partitions quadrants Unicode 2x2 (bits : 0=TL, 1=TR, 2=BL, 3=BR)
+/// 2x2 Unicode quadrant partition table (bits: 0=TL, 1=TR, 2=BL, 3=BR)
 const QUADRANT_PATTERNS: [(u8, char); 8] = [
     (0b0000, ' '),
     (0b0001, '▘'),
@@ -23,7 +23,7 @@ const SUB_LINE_ROWS: i32 = 4;
 const ENTRY_GAP_ROWS: i32 = 1;
 
 struct CachedSubLine {
-    /// Grille sous-pixel nette (sans flou), dimension `max_sub_w * 8`
+    /// Sharp unblurred sub-pixel grid of size `max_sub_w * 8`
     sharp_grid: Vec<f32>,
     used_sub_w: usize,
 }
@@ -33,7 +33,7 @@ struct CachedLyricEntry {
     sub_lines: Vec<CachedSubLine>,
 }
 
-/// État de défilement vertical lissé des paroles + cache de rastérisation sous-pixel 0-allocation à 144 FPS
+/// Vertical lyrics scroll state + zero-allocation 144 FPS sub-pixel rasterization cache
 #[derive(Default)]
 pub struct LyricsScrollState {
     smooth_row: f32,
@@ -73,11 +73,7 @@ impl LyricsScrollState {
     }
 
     fn ensure_layout(&mut self, lyrics: &SyncedLyrics, wrap_chars: usize, max_sub_w: usize) {
-        let first_text = lyrics
-            .lines
-            .first()
-            .map(|l| l.text.as_str())
-            .unwrap_or("");
+        let first_text = lyrics.lines.first().map(|l| l.text.as_str()).unwrap_or("");
 
         if self.cached_line_count == lyrics.lines.len()
             && self.cached_wrap_chars == wrap_chars
@@ -120,7 +116,7 @@ impl LyricsScrollState {
     }
 }
 
-/// Découpe une ligne de paroles en sous-lignes par mots entiers
+/// Word-wraps a lyric line into sub-lines of at most `max_width` characters
 pub fn wrap_lyric_text(text: &str, max_width: usize) -> Vec<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -152,8 +148,8 @@ pub fn wrap_lyric_text(text: &str, max_width: usize) -> Vec<String> {
     wrapped
 }
 
-/// Retourne la matrice bitmap 5x6 sous-pixels (largeur 5, hauteur 6 = 3 lignes terminal en Quadrants 2x2)
-/// ainsi que l'avance horizontale en sous-pixels pour un caractère donné.
+/// Returns the 5x6 sub-pixel bitmap matrix (width 5, height 6 = 3 terminal rows in 2x2 quadrants)
+/// and horizontal sub-pixel advance for a character.
 fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
     let c = match ch {
         '’' | '‘' | '`' => '\'',
@@ -175,7 +171,7 @@ fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
         '(' => ([0b00110, 0b01100, 0b01100, 0b01100, 0b00110, 0], 4),
         ')' => ([0b01100, 0b00110, 0b00110, 0b00110, 0b01100, 0], 4),
 
-        // Majuscules
+        // Uppercase
         'A' | 'À' | 'Â' => ([0b01110, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
         'B' => ([0b11110, 0b11011, 0b11110, 0b11011, 0b11110, 0], 5),
         'C' | 'Ç' => ([0b01111, 0b11000, 0b11000, 0b11000, 0b01111, 0], 5),
@@ -203,7 +199,7 @@ fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
         'Y' => ([0b11011, 0b01110, 0b00100, 0b00100, 0b00100, 0], 5),
         'Z' => ([0b11111, 0b00110, 0b01100, 0b11000, 0b11111, 0], 5),
 
-        // Minuscules & voyelles accentuées françaises
+        // Lowercase & accented vowels
         'a' => ([0, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
         'à' | 'â' => ([0b01100, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
         'b' => ([0b11000, 0b11000, 0b11110, 0b11011, 0b11110, 0], 5),
@@ -239,7 +235,7 @@ fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
         'y' => ([0, 0b11011, 0b11011, 0b01111, 0b00011, 0b01110], 5),
         'z' => ([0, 0b11111, 0b00110, 0b01100, 0b11111, 0], 5),
 
-        // Chiffres
+        // Digits
         '0' => ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
         '1' => ([0b00110, 0b01110, 0b00110, 0b00110, 0b01111, 0], 4),
         '2' => ([0b01110, 0b11011, 0b00110, 0b01100, 0b11111, 0], 5),
@@ -255,7 +251,7 @@ fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
     }
 }
 
-/// Rastérise une chaîne de texte dans une grille d'opacité sous-pixel `(width_sub, 8)`
+/// Rasterizes a text line into a `(width_sub, 8)` sub-pixel opacity grid
 fn rasterize_line_subpixels(text: &str, max_sub_w: usize) -> (Vec<f32>, usize) {
     let mut cursor_x = 2usize;
     let mut grid = vec![0.0_f32; max_sub_w * SUB_H];
@@ -283,7 +279,7 @@ fn rasterize_line_subpixels(text: &str, max_sub_w: usize) -> (Vec<f32>, usize) {
     (grid, used_w)
 }
 
-/// Applique un filtre de flou gaussien séparable 2D sans allocation sur la grille sous-pixel.
+/// Applies an in-place 2D separable Gaussian blur filter over the sub-pixel grid.
 fn apply_gaussian_blur_in_place(
     grid: &mut [f32],
     temp: &mut [f32],
@@ -321,8 +317,8 @@ fn apply_gaussian_blur_in_place(
     }
 }
 
-/// Convertit 4 valeurs d'alpha sous-pixels `[TL, TR, BL, BR]` en caractère Quadrant Unicode 2x2
-/// + couleurs `(fg, bg)` interpolées en espace Oklab.
+/// Converts 4 sub-pixel alpha values `[TL, TR, BL, BR]` into a 2x2 Unicode quadrant character
+/// and Oklab-interpolated `(fg, bg)` colors.
 fn best_quadrant_alpha(
     alphas: [f32; 4],
     bg_ok: palette::Oklab,
@@ -377,7 +373,7 @@ fn best_quadrant_alpha(
     Some((best_ch, oklab_to_rgb(fg_ok), oklab_to_rgb(cell_bg_ok)))
 }
 
-/// Paramètres de rendu de la colonne de paroles synchronisées
+/// Parameters for rendering the synchronized lyrics column
 pub struct LyricsRenderParams<'a> {
     pub bg: &'a AmbientBackground,
     pub lyrics: &'a SyncedLyrics,
@@ -386,8 +382,8 @@ pub struct LyricsRenderParams<'a> {
     pub opacity: f32,
 }
 
-/// Rendu des paroles synchronisées en **Grandes Lettres Pixel-Art Anti-Aliasées (Quadrants Unicode 2x2)**
-/// avec vrai flou gaussien 2D sur les lignes passées et futures (0 allocation par frame).
+/// Renders synchronized lyrics using large anti-aliased 2x2 Unicode quadrant pixel-art typography
+/// with real 2D Gaussian blur on past and upcoming lines (0 allocations per frame).
 pub fn render_synced_lyrics(
     area: Rect,
     buf: &mut Buffer,
@@ -569,20 +565,20 @@ mod tests {
 
     #[test]
     fn test_wrap_lyric_text_splits_long_lines_cleanly() {
-        let line = "Et quand je donne ma langue aux chats, je vois les autres";
+        let line = "When the night falls down around the neon city lights";
         let wrapped = wrap_lyric_text(line, 34);
         assert_eq!(
             wrapped,
             vec![
-                "Et quand je donne ma langue aux".to_string(),
-                "chats, je vois les autres".to_string()
+                "When the night falls down around".to_string(),
+                "the neon city lights".to_string()
             ]
         );
     }
 
     #[test]
     fn test_subpixel_rasterizer_and_gaussian_blur() {
-        let (mut grid, used_w) = rasterize_line_subpixels("Lo-li-ta", 120);
+        let (mut grid, used_w) = rasterize_line_subpixels("Midnight", 120);
         let mut temp = vec![0.0_f32; 120 * SUB_H];
         assert!(used_w > 20);
         let peak_before = grid.iter().copied().fold(0.0_f32, f32::max);

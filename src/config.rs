@@ -9,15 +9,15 @@ use std::path::PathBuf;
     about = "High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)"
 )]
 pub struct CliArgs {
-    /// Active le mode économiseur d'écran (quitte immédiatement à la moindre touche ou mouvement/clic souris)
+    /// Enable screensaver mode (exits immediately on any key press or mouse movement/click, except Tab)
     #[arg(long)]
     pub screensaver: bool,
 
-    /// Fréquence de rafraîchissement cible en FPS (surcharge config.toml)
+    /// Target refresh rate in FPS (overrides config.toml)
     #[arg(long)]
     pub fps: Option<u32>,
 
-    /// Affiche le compteur de FPS et le temps de frame en haut à droite
+    /// Show live FPS and frame time counter in the top-right corner
     #[arg(long)]
     pub debug_fps: bool,
 }
@@ -50,7 +50,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load(cli: &CliArgs) -> Self {
-        let mut cfg = Self:: config_path()
+        let mut cfg = Self::config_path()
             .and_then(|p| fs::read_to_string(p).ok())
             .and_then(|raw| toml::from_str::<AppConfig>(&raw).ok())
             .unwrap_or_default();

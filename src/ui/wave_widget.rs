@@ -3,18 +3,15 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-/// Masques binaires des 8 points d'une cellule Braille Unicode (U+2800..U+28FF)
-const BRAILLE_DOTS: [[u8; 4]; 2] = [
-    [0x01, 0x02, 0x04, 0x40],
-    [0x08, 0x10, 0x20, 0x80],
-];
+/// Bitmasks for the 8 dots of a Unicode Braille cell (U+2800..U+28FF)
+const BRAILLE_DOTS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
 #[inline]
 pub fn braille_char_from_mask(mask: u8) -> char {
     char::from_u32(0x2800 + (mask as u32)).unwrap_or('⠀')
 }
 
-/// Encode la crête d'une onde continue sur une cellule de 2x4 sous-pixels Braille.
+/// Encodes a continuous wave crest across a 2x4 sub-pixel Unicode Braille cell.
 pub fn compute_cell_braille_mask(
     cell_row_from_top: u16,
     total_cell_rows: u16,
@@ -50,10 +47,9 @@ pub fn compute_cell_braille_mask(
     (mask, is_crest)
 }
 
-/// Dessine la double onde sonore organique de la Vue 1 (Image 3 de Sonora) :
-/// - Deux courbes Braille superposées (crête principale lumineuse + crête d'écho douce)
-/// - Remplissage dégradé vertical sous la courbe qui s'estompe vers le fond noir tout en bas
-/// - Aucune ligne parasite de pointillés en bas de l'écran.
+/// Renders the organic double Braille soundwave for View 1 (No-Lyrics mode):
+/// - Two superimposed Braille curves (bright primary crest + softer secondary echo crest)
+/// - Vertical gradient fill beneath the crest fading into the dark background at the bottom
 pub fn render_braille_wave(
     area: Rect,
     buf: &mut Buffer,
@@ -82,7 +78,7 @@ pub fn render_braille_wave(
         let idx_l = (col as usize) * 2;
         let idx_r = idx_l + 1;
 
-        // Courbe primaire
+        // Primary curve
         let h1_l = (primary_sub_heights[idx_l] * max_sub_h).clamp(2.5, max_sub_h);
         let h1_r = (primary_sub_heights[idx_r] * max_sub_h).clamp(2.5, max_sub_h);
         let prev1_l = if idx_l > 0 {
@@ -96,7 +92,7 @@ pub fn render_braille_wave(
             h1_r
         };
 
-        // Courbe secondaire (écho)
+        // Secondary echo curve
         let h2_l = (secondary_sub_heights[idx_l] * max_sub_h * 0.82).clamp(2.0, max_sub_h);
         let h2_r = (secondary_sub_heights[idx_r] * max_sub_h * 0.82).clamp(2.0, max_sub_h);
         let prev2_l = if idx_l > 0 {
@@ -123,14 +119,14 @@ pub fn render_braille_wave(
             let cell_center_sub_y = (row * 4 + 2) as f32;
             let base_oklab = bg.oklab_at(screen_x, screen_y);
 
-            // Remplissage sous la courbe : fort juste sous la crête, et fond vers le noir (#050507) en bas
+            // Gradient fill below the crest fading smoothly to #050508 at the bottom
             let bg_rgb = if cell_center_sub_y >= crest1_sub_y - 1.5 {
                 let dist_from_crest = (cell_center_sub_y - crest1_sub_y).max(0.0);
                 let norm_depth = (dist_from_crest / avg_h1.max(4.0)).clamp(0.0, 1.0);
-                // S'estompe complètement à 0 vers le bas de l'écran comme sur l'Image 3
                 let vertical_fade = (1.0 - norm_depth).powf(1.55);
                 let fill_strength = vertical_fade * 0.38 * opacity;
-                let wave_tint = lerp_oklab(palette.accent, palette.secondary_accent, norm_depth * 0.65);
+                let wave_tint =
+                    lerp_oklab(palette.accent, palette.secondary_accent, norm_depth * 0.65);
                 let filled_ok = lerp_oklab(base_oklab, wave_tint, fill_strength);
                 oklab_to_rgb(filled_ok)
             } else {

@@ -1,43 +1,95 @@
-# Kymat — Screensaver Musical ASCII/TUI 144 FPS (Omarchy × Sonora)
+# Kymat
 
-Économiseur d'écran musical haute fréquence (**144 FPS**) écrit en Rust pour **Wayland / Hyprland** (Omarchy), inspiré de l'esthétique plein écran de **Sonora**.
+A smooth **144 FPS ASCII / terminal music screensaver** for **Wayland & Hyprland** ([Omarchy](https://omarchy.org/)), inspired by [Sonora](https://github.com/sonora)'s fullscreen player aesthetic.
 
-## Fonctionnalités
+Kymat reacts in real time to whatever music is playing on your desktop — displaying pixel-art album covers, ambient colors extracted from the artwork, synchronized lyrics with depth-of-field blur, and a live audio soundwave.
 
-- **Moteur TUI 144 FPS sans tearing** (`ratatui` + `crossterm` avec *Synchronized Output* `CSI ? 2026 h/l` et 0 allocation mémoire par frame).
-- **Fond dynamique Oklab** : extraction chromatique de la pochette (`color-thief`), fond quasi-noir (`#050508`) et double halo radial gaussien interpolé dans l'espace perceptuel Oklab.
-- **Pochette Pixel-Art Quadrants Unicode $2 \times 2$** (`▘▝▀▖▌▞▛█`) avec coins arrondis SDF et cœur plein Nerd Font (`\u{f004}`).
-- **Double vue dynamique (`Tab`)** :
-  - **Vue 1 (Mode Sans Paroles)** : pochette centrée + double onde sonore Braille ($2 \times 4$ sous-pixels, interpolation spline de Catmull-Rom, Auto-Gain Control PipeWire/PulseAudio `@DEFAULT_MONITOR@`).
-  - **Vue 2 (Mode Paroles Synchronisées)** : split-screen avec typographie sous-pixel $5 \times 6$ (3x plus grande que le titre) et **vrai flou gaussien 2D** sur les lignes passées et futures.
-- **Compatibilité universelle MPRIS & Paroles** :
-  - Compatible **Sonora**, **Spotify**, **Deezer**, **YouTube**, **YouTube Music**, navigateurs (Brave/Chrome/Firefox), VLC, mpv.
-  - Lecture prioritaire dans `~/.cache/sonora/cache.sqlite` (`READ_ONLY`) + fallback universel **LRCLIB** (`lrclib.net`) avec nettoyage automatique des titres YouTube.
+---
 
-## Compilation & Installation
+## Preview
+
+### Synced Lyrics View
+![Kymat Synced Lyrics View](assets/lyrics-view.png)
+
+### Soundwave View
+![Kymat Soundwave View](assets/wave-view.png)
+
+---
+
+## Highlights
+
+- **Two Visual Modes (`Tab`)**
+  - **Lyrics View**: Split-screen layout with large pixel-art lyrics and smooth Gaussian blur on past and upcoming lines.
+  - **Soundwave View**: Centered album artwork over a live, double-crest audio wave that reacts to your system audio.
+- **Works with Any Music Player**
+  - Automatically detects **Sonora**, **Spotify**, **Deezer**, **YouTube Music**, **YouTube** (Brave, Chromium, Firefox), **VLC**, **mpv**, and any MPRIS-enabled player.
+  - Fetches synced lyrics from Sonora's local cache or automatically via **LRCLIB** (`lrclib.net`).
+- **Adaptive Ambient Theme**
+  - Extracts dominant colors from the current album cover to tint the dark radial background glow, heart icon, progress bar, and soundwave.
+- **Built for Omarchy & Dual-Monitor Setups**
+  - Can run standalone in any terminal or automatically launch on a secondary monitor when Omarchy enters screensaver mode (keeping the classic Omarchy ASCII screensaver on your primary screen).
+
+---
+
+## Installation
+
+### From Source (Arch Linux / Omarchy)
 
 ```bash
+git clone https://github.com/Margul7803/kymat.git
+cd kymat
 cargo build --release
+
 install -Dm755 target/release/kymat ~/.local/bin/kymat
 install -Dm644 foot-kymat.ini ~/.config/kymat/foot-kymat.ini
+install -Dm644 config.toml.example ~/.config/kymat/config.toml
 ```
 
-## Utilisation
+---
 
-- **Mode interactif** (`Tab` pour switcher Paroles / Onde sonore, `q` ou `Esc` pour quitter) :
-  ```bash
-  kymat --fps 144
-  ```
-- **Mode screensaver** (`Tab` pour switcher de vue, toute autre touche ou mouvement souris quitte immédiatement) :
-  ```bash
-  kymat --screensaver --fps 144
-  ```
+## Usage
 
-## Intégration Omarchy (Double Écran : Omarchy sur l'écran principal + Kymat sur le second)
+Run `kymat` in any TrueColor terminal (`foot`, `ghostty`, `alacritty`, `kitty`):
 
-Les scripts dans [`scripts/`](scripts/) permettent de surcharger proprement `omarchy-launch-screensaver` dans `~/.local/bin/` sans toucher à `/usr/share/omarchy/` :
+```bash
+kymat
+```
+
+### Controls
+
+| Key | Action |
+| --- | --- |
+| `Tab` | Switch between **Lyrics View** and **Soundwave View** |
+| `q` / `Esc` | Quit (in normal mode) |
+| Any key / Mouse move | Exit screensaver (when launched with `--screensaver`) |
+
+---
+
+## Omarchy Dual-Monitor Screensaver Setup
+
+If you use **Omarchy** with a second monitor connected, you can display the classic Omarchy screensaver on your primary display and **Kymat** on your secondary display:
 
 ```bash
 install -Dm755 scripts/omarchy-launch-screensaver ~/.local/bin/omarchy-launch-screensaver
 install -Dm755 scripts/kymat-screensaver-runner ~/.local/bin/kymat-screensaver-runner
 ```
+
+Both screensavers wake up and close together as soon as you move the mouse or press a key on either screen.
+
+---
+
+## Configuration
+
+Optional settings can be customized in `~/.config/kymat/config.toml`:
+
+```toml
+fps = 144
+audio_sensitivity = 1.15
+background_transition_secs = 1.5
+layout_transition_secs = 0.6
+auto_lyrics_split = true
+```
+
+## License
+
+GPL-3.0-or-later

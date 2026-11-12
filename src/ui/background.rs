@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use std::time::{Duration, Instant};
 
-/// Matrice de Bayer 4x4 très subtile pour éviter le color banding sans jamais créer de trame visible
+/// Subtle 4x4 Bayer matrix used to prevent 8-bit color banding without visible dithering patterns
 const BAYER_4X4: [[f32; 4]; 4] = [
     [-0.46875, 0.03125, -0.34375, 0.15625],
     [0.28125, -0.21875, 0.40625, -0.09375],
@@ -12,19 +12,19 @@ const BAYER_4X4: [[f32; 4]; 4] = [
     [0.46875, -0.03125, 0.34375, -0.15625],
 ];
 
-/// Palette extraite d'une pochette d'album dans l'espace perceptuel Oklab,
-/// calibrée pour reproduire fidèlement le fond très sombre à halos radiaux de Sonora.
+/// Perceptual Oklab palette extracted from an album cover, calibrated for a deep dark background
+/// with two soft radial glow blobs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThemePalette {
-    /// Couleur de fond de base quasi-noire (#050507) sur tous les bords
+    /// Near-black base background color (#050508) around all screen edges
     pub base_dark: Oklab,
-    /// Halo radial principal (derrière la cover / haut-centre)
+    /// Primary radial glow (behind the album cover or active lyric line)
     pub primary_glow: Oklab,
-    /// Halo radial secondaire (centre-bas / droite)
+    /// Secondary radial glow (lower-center/right ambient depth)
     pub secondary_glow: Oklab,
-    /// Couleur d'accent vive (pour le cœur ♥, la crête de l'onde et la barre de temps)
+    /// Vibrant accent color (used for the heart icon, wave crest, and active progress bar)
     pub accent: Oklab,
-    /// Seconde couleur d'accent pour le dégradé sous l'onde sonore
+    /// Secondary accent color for the vertical gradient fill beneath the soundwave
     pub secondary_accent: Oklab,
 }
 
@@ -46,13 +46,13 @@ impl Default for ThemePalette {
 }
 
 impl ThemePalette {
-    /// Construit une palette sombre style Sonora à partir des couleurs dominantes de la cover
+    /// Builds a dark radial palette from the dominant RGB colors of the album cover
     pub fn from_dominant_rgb(colors: &[(u8, u8, u8)]) -> Self {
         if colors.is_empty() {
             return Self::default();
         }
 
-        // Trier les couleurs par saturation (chroma) en ignorant le blanc/gris pur
+        // Sort candidate colors by chroma (saturation)
         let mut oklab_candidates: Vec<(Oklab, f32)> = colors
             .iter()
             .copied()
@@ -63,12 +63,10 @@ impl ThemePalette {
             })
             .collect();
 
-        oklab_candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        oklab_candidates
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let c_primary = oklab_candidates[0].0;
-        // Choisir une seconde couleur suffisamment distincte de la première si possible
         let c_secondary = oklab_candidates
             .iter()
             .skip(1)
@@ -86,14 +84,12 @@ impl ThemePalette {
                 }
             });
 
-        // Base très sombre (#050507) légèrement teintée
         let base_dark = Oklab::new(
             0.095,
             (c_primary.a * 0.12).clamp(-0.015, 0.015),
             (c_primary.b * 0.12).clamp(-0.015, 0.015),
         );
 
-        // Halos radiaux sombres (L autour de 0.21-0.24 au cœur du halo, jamais criards)
         let primary_glow = Oklab::new(
             0.235,
             (c_primary.a * 0.85).clamp(-0.09, 0.09),
@@ -106,7 +102,6 @@ impl ThemePalette {
             (c_secondary.b * 0.75).clamp(-0.08, 0.08),
         );
 
-        // Couleur d'accent douce et lumineuse (comme le rose corail de Moi... Lolita)
         let mut accent = c_primary;
         accent.l = accent.l.clamp(0.68, 0.78);
         accent.a = (accent.a * 1.15).clamp(-0.18, 0.18);
@@ -162,7 +157,7 @@ pub fn lerp_oklab(a: Oklab, b: Oklab, t: f32) -> Oklab {
     )
 }
 
-/// Gestionnaire du fond "Ambient Glow" radial style Sonora avec cache statique 144 FPS
+/// Radial ambient glow background manager with static cell caching at 144 FPS
 pub struct AmbientBackground {
     from_palette: ThemePalette,
     target_palette: ThemePalette,
@@ -244,8 +239,7 @@ impl AmbientBackground {
         }
     }
 
-    /// Génère un fond très sombre (#050507 sur tous les bords) avec 2 halos radiaux diffus
-    /// comme dans Sonora (Images 1 & 3), au lieu d'un dégradé 4-coins trop lumineux.
+    /// Generates a deep dark background (#050508 at all edges) with 2 diffused radial glow blobs
     fn rebuild_grid(&mut self, width: u16, height: u16, split_t: f32) {
         self.cached_width = width;
         self.cached_height = height;
@@ -258,10 +252,6 @@ impl AmbientBackground {
         let w_denom = (width.saturating_sub(1)).max(1) as f32;
         let h_denom = (height.saturating_sub(1)).max(1) as f32;
 
-        // En Vue 1 (centrée, split_t = 0), le halo principal est au centre-haut (0.48, 0.34)
-        // et le halo secondaire en bas-gauche/centre (0.36, 0.65).
-        // En Vue 2 (paroles, split_t = 1), un halo doux éclaire la droite derrière la ligne active (0.68, 0.35)
-        // et le second halo doux est en bas au centre (0.42, 0.72).
         let p1_x = 0.46 + 0.22 * split_t;
         let p1_y = 0.33;
         let p2_x = 0.38;
@@ -272,17 +262,17 @@ impl AmbientBackground {
             for x in 0..width {
                 let u = (x as f32) / w_denom;
 
-                // Distance radiale normalisée au halo 1 (gaussienne large)
+                // Normalized radial Gaussian distance to primary glow blob
                 let dx1 = (u - p1_x) * 1.35;
                 let dy1 = (v - p1_y) * 1.55;
                 let w1 = (-3.2 * (dx1 * dx1 + dy1 * dy1)).exp() * 0.78;
 
-                // Distance radiale au halo 2
+                // Normalized radial Gaussian distance to secondary glow blob
                 let dx2 = (u - p2_x) * 1.45;
                 let dy2 = (v - p2_y) * 1.65;
                 let w2 = (-3.6 * (dx2 * dx2 + dy2 * dy2)).exp() * 0.68;
 
-                // Assombrissement supplémentaire vers les bords extrêmes de l'écran (vignette noire)
+                // Dark vignette toward screen edges
                 let edge_dx = (u - 0.5) * 2.0;
                 let edge_dy = (v - 0.5) * 2.0;
                 let edge_dist = (edge_dx * edge_dx + edge_dy * edge_dy).min(1.4);
@@ -303,7 +293,6 @@ impl AmbientBackground {
                 self.cached_oklab.push(cell_ok);
 
                 let (r, g, b) = oklab_to_rgb(cell_ok);
-                // Tramage ultra-léger (+/- 0.7) invisible à l'œil nu mais lissant les transitions
                 let dither = BAYER_4X4[(y as usize) & 3][(x as usize) & 3] * 1.2;
                 let dr = (r as f32 + dither).clamp(0.0, 255.0) as u8;
                 let dg = (g as f32 + dither).clamp(0.0, 255.0) as u8;

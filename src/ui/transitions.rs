@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-/// Animation fluide de transition entre la Vue 1 (Cover Centrée, `progress = 0.0`)
-/// et la Vue 2 (Split View Paroles Synchronisées, `progress = 1.0`).
+/// Smooth transition animation between View 1 (Centered Cover + Waveform, `progress = 0.0`)
+/// and View 2 (Split View Synchronized Lyrics, `progress = 1.0`).
 pub struct LayoutTransition {
     from_val: f32,
     target_val: f32,
@@ -52,7 +52,7 @@ impl LayoutTransition {
     }
 }
 
-/// Courbe d'easing Cubic-Bezier style macOS/Sonora
+/// Cubic-Bezier ease-in-out curve
 #[inline]
 pub fn cubic_bezier_ease_in_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);

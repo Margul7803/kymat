@@ -15,7 +15,7 @@ pub struct FftAnalyzer {
     scratch: Vec<Complex<f32>>,
     band_edges: Vec<(usize, usize)>,
     band_weights: Vec<f32>,
-    /// Auto-Gain Control (AGC) : enveloppe glissante du pic pour normaliser quel que soit le volume système
+    /// Auto-Gain Control (AGC) rolling peak envelope for volume-independent normalization
     rolling_peak: f32,
 }
 
@@ -28,7 +28,7 @@ impl FftAnalyzer {
             .map(|n| 0.5 * (1.0 - (2.0 * PI * (n as f32) / ((FFT_SIZE - 1) as f32)).cos()))
             .collect();
 
-        // Plage musicale dense (45 Hz à 8 500 Hz) pour que toute la largeur de l'écran soit active
+        // Dense musical frequency range (45 Hz to 8,500 Hz) so the full screen width stays active
         let min_freq = 45.0_f32;
         let max_freq = 8_500.0_f32;
         let bin_hz = SAMPLE_RATE / (FFT_SIZE as f32);
@@ -47,7 +47,7 @@ impl FftAnalyzer {
             let b1 = ((f1 / bin_hz).ceil() as usize).clamp(b0 + 1, max_bin + 1);
             band_edges.push((b0, b1));
 
-            // Compensation psychoacoustique prononcée sur les médiums/aigus
+            // Psychoacoustic tilt boosting mid and high frequencies
             let center_f = (f0 * f1).sqrt();
             let tilt = (center_f / 180.0).powf(0.42).clamp(0.70, 3.8);
             band_weights.push(tilt);
@@ -75,7 +75,7 @@ impl FftAnalyzer {
         }
         let rms = (rms_acc / (samples.len().max(1) as f32)).sqrt();
 
-        // Si le flux est strictement silencieux (< -75 dB), retourner zéro immédiatement
+        // If the stream is strictly silent (< -75 dB), return zero immediately
         if rms < 1.5e-4 {
             return [0.0; NUM_BANDS];
         }
@@ -105,7 +105,7 @@ impl FftAnalyzer {
             frame_max = frame_max.max(weighted);
         }
 
-        // Mise à jour de l'Auto-Gain Control (montée rapide, descente lente)
+        // Update Auto-Gain Control (fast attack, slow decay)
         if frame_max > self.rolling_peak {
             self.rolling_peak = self.rolling_peak * 0.70 + frame_max * 0.30;
         } else {
@@ -116,11 +116,10 @@ impl FftAnalyzer {
         let ref_peak = self.rolling_peak.max(1e-4);
         for i in 0..NUM_BANDS {
             let rel = (raw_bands[i] / ref_peak).clamp(0.0, 1.0);
-            // Courbe de puissance 0.65 pour donner du relief aux harmoniques moyennes comme dans Sonora
             bands[i] = rel.powf(0.65);
         }
 
-        // Lissage spatial (1-2-3-2-1) pour former des collines organiques larges (comme Image 3)
+        // 5-tap spatial smoothing (1-2-3-2-1) to form wide organic hills
         let mut smoothed = bands;
         for i in 2..(NUM_BANDS - 2) {
             smoothed[i] = bands[i - 2] * 0.12
@@ -155,6 +154,9 @@ mod tests {
             .collect();
         let out_sine = analyzer.push_samples(&sine, 1.2);
         let max_band = out_sine.iter().copied().fold(0.0_f32, f32::max);
-        assert!(max_band > 0.3, "Expected clear peak on 440Hz sine, got {max_band}");
+        assert!(
+            max_band > 0.3,
+            "Expected clear peak on 440Hz sine, got {max_band}"
+        );
     }
 }

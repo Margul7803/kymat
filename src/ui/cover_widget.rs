@@ -8,8 +8,8 @@ use std::time::Duration;
 
 pub type Rgb = (u8, u8, u8);
 
-/// Table des 8 partitions quadrants Unicode 2x2 (bits : 0=TL, 1=TR, 2=BL, 3=BR)
-/// Chaque partition associe les 4 sous-pixels entre `fg` (bit=1) et `bg` (bit=0).
+/// 8 Unicode 2x2 quadrant partition patterns (bits: 0=TL, 1=TR, 2=BL, 3=BR)
+/// Each pattern partitions the 4 sub-pixels between `fg` (bit=1) and `bg` (bit=0).
 const QUADRANT_PATTERNS: [(u8, char); 8] = [
     (0b0000, ' '),
     (0b0001, '▘'),
@@ -21,18 +21,18 @@ const QUADRANT_PATTERNS: [(u8, char); 8] = [
     (0b0111, '▛'),
 ];
 
-/// Cellule pré-calculée de la pochette d'album pour éviter tout recalcul SDF/quadrant à 144 FPS
+/// Pre-calculated cover art cell avoiding per-frame SDF and quadrant fitting at 144 FPS
 #[derive(Clone, Copy)]
 pub enum CachedCoverCell {
-    /// Cellule 100% hors des coins arrondis
+    /// Cell completely outside the rounded corners
     Transparent,
-    /// Cellule intérieure 100% opaque : caractère quadrant et couleurs précalculés une seule fois
+    /// Fully opaque interior cell: quadrant character and colors precomputed once per track
     Opaque { ch: char, fg: Rgb, bg: Rgb },
-    /// Cellule de bord arrondi (semi-transparente) : fusionnée à la volée avec le halo d'arrière-plan
+    /// Semi-transparent rounded corner cell: blended on the fly with the background glow
     Edge { pixels: [Rgb; 4], covs: [f32; 4] },
 }
 
-/// Cache de la grille de cellules quadrants 2x2 pour un rendu 0-allocation à 144 FPS
+/// 2x2 quadrant cell grid cache for zero-allocation rendering at 144 FPS
 #[derive(Default)]
 pub struct ScaledCoverCache {
     art_url: String,
@@ -113,7 +113,7 @@ impl ScaledCoverCache {
     }
 }
 
-/// Paramètres de métadonnées passés au rendu de la colonne cover
+/// Metadata view parameters for the cover column renderer
 pub struct CoverMetaView<'a> {
     pub title: &'a str,
     pub artist: &'a str,
@@ -122,7 +122,7 @@ pub struct CoverMetaView<'a> {
     pub show_time_bar_under_artist: bool,
 }
 
-/// Test SDF (Signed Distance Field) d'appartenance à un rectangle à coins arrondis.
+/// Signed Distance Field (SDF) coverage test for a rounded rectangle.
 #[inline]
 pub fn rounded_rect_coverage(px: f32, py: f32, w: f32, h: f32, radius: f32) -> f32 {
     let half_w = w * 0.5;
@@ -144,8 +144,8 @@ fn avg_rgb(sum_r: u32, sum_g: u32, sum_b: u32, count: u32, fallback: Rgb) -> Rgb
     }
 }
 
-/// Choisit le caractère quadrant Unicode 2x2 (`▀`, `▌`, `▞`, `▛`, etc.) et le couple `(fg, bg)`
-/// qui minimise l'erreur quadratique sur les 4 sous-pixels d'une cellule terminal.
+/// Selects the 2x2 Unicode quadrant glyph (`▀`, `▌`, `▞`, `▛`, etc.) and `(fg, bg)` pair
+/// minimizing squared RGB error across the 4 sub-pixels of a terminal cell.
 fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
     let mut best_err = u32::MAX;
     let mut best_ch = '▀';
@@ -189,7 +189,7 @@ fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
             err += (dr * dr + dg * dg + db * db) as u32;
         }
 
-        // Légère préférence pour le demi-bloc horizontal ▀ à erreur quasi-égale (évite le bruit sur les aplats)
+        // Slight tie-breaker preference for horizontal half-block `▀` on flat regions
         if mask == 0b0011 {
             err = err.saturating_sub(18);
         }
@@ -205,8 +205,8 @@ fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
     (best_ch, best_fg, best_bg)
 }
 
-/// Rendu de la pochette en blocs/quadrants Unicode (`▀`, `▌`, `▛`, etc.), du titre avec cœur plein,
-/// de l'artiste et (optionnellement selon le mode) de la barre de temps passive sous l'artiste.
+/// Renders the 2x2 Unicode quadrant album cover, bold title with solid heart icon,
+/// artist name, and (when in split view) the passive progress bar beneath the artist.
 pub fn render_cover_and_meta(
     area: Rect,
     buf: &mut Buffer,
@@ -326,11 +326,11 @@ pub fn render_cover_and_meta(
         );
     }
 
-    // 1. Titre en gras (#FFFFFF) suivi du cœur plein Nerd Font `\u{f004}` (Images 1 & 3)
+    // 1. Bold white title (#FFFFFF) followed by solid Nerd Font heart `\u{f004}`
     let title_y = start_y + cover_h + 1;
     render_title_with_heart(buf, area.x, title_y, area.width, meta.title, bg);
 
-    // 2. Artiste (#8899A6)
+    // 2. Artist name (#969EAA)
     let artist_y = title_y + 1;
     if !meta.artist.is_empty() {
         draw_centered_text(
@@ -343,7 +343,7 @@ pub fn render_cover_and_meta(
         );
     }
 
-    // 3. En Vue 2 (Split Lyrics - Image 1), la barre de temps est juste sous l'artiste
+    // 3. In View 2 (Split Lyrics), the passive time bar sits directly below the artist
     if meta.show_time_bar_under_artist {
         let bar_y = artist_y + 2;
         let bar_w = cover_w.saturating_sub(2).clamp(18, 34);
@@ -366,7 +366,7 @@ fn render_title_with_heart(
         return;
     }
     let display_title = if title.is_empty() {
-        "En attente de lecture…"
+        "Waiting for playback…"
     } else {
         title
     };
@@ -414,7 +414,7 @@ fn render_title_with_heart(
         let heart_x = start_x + title_len + 1;
         let (ar, ag, ab) = oklab_to_rgb(bg.current_palette().accent);
         if let Some(cell) = buf.cell_mut((heart_x, y)) {
-            // '\u{f004}' () est le cœur plein (nf-fa-heart) dans JetBrainsMono Nerd Font
+            // '\u{f004}' is the solid heart (nf-fa-heart) in JetBrainsMono Nerd Font
             cell.set_char('\u{f004}');
             cell.set_style(Style::default().fg(Color::Rgb(ar, ag, ab)));
         }

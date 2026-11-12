@@ -28,18 +28,18 @@ pub struct App {
     art_url_tx: watch::Sender<String>,
     meta_tx: watch::Sender<TrackMetadata>,
 
-    current_mpris: MprisState,
+    pub current_mpris: MprisState,
     last_track_key: String,
     last_art_url: String,
-    current_cover: Option<CoverArtData>,
-    current_lyrics: Option<SyncedLyrics>,
+    pub current_cover: Option<CoverArtData>,
+    pub current_lyrics: Option<SyncedLyrics>,
 
-    bg: AmbientBackground,
+    pub bg: AmbientBackground,
     cover_cache: ScaledCoverCache,
-    smoother: SpectrumSmoother,
+    pub smoother: SpectrumSmoother,
     wave_sub_cols: Vec<f32>,
     wave_sec_sub_cols: Vec<f32>,
-    layout_transition: LayoutTransition,
+    pub layout_transition: LayoutTransition,
     lyrics_scroll: LyricsScrollState,
 
     frame_times: [f32; 60],
@@ -149,14 +149,14 @@ impl App {
             return;
         }
 
-        // 1. Fond sombre à halos radiaux Oklab
+        // 1. Deep dark Oklab radial ambient background
         self.bg.render(area, buf);
 
         let is_idle = self.current_mpris.metadata.is_empty();
         let split_t = self.layout_transition.value();
 
-        // L'onde sonore ne s'affiche QU'EN MODE SANS PAROLES (Vue 1 : split_t < 1.0)
-        // comme sur l'Image 3 (et disparaît complètement en Vue 2 Paroles comme sur l'Image 1).
+        // The soundwave is only visible in No-Lyrics mode (View 1: split_t < 1.0)
+        // and fades out completely in Synced Lyrics mode (View 2).
         let wave_opacity = if is_idle {
             0.75
         } else {
@@ -228,7 +228,7 @@ impl App {
                 &meta_view,
             );
 
-            // Dessin de l'onde sonore uniquement en Vue 1 (Mode Sans Paroles — Image 3)
+            // Render Braille soundwave only in View 1 (No-Lyrics mode)
             if wave_opacity > 0.02 {
                 let sub_cols = (wave_area.width as usize) * 2;
                 self.smoother
@@ -244,8 +244,7 @@ impl App {
                     wave_opacity,
                 );
 
-                // En Vue 1 (Image 3), la barre de progression passive est tout en bas au centre
-                // par-dessus le bas de l'onde sonore !
+                // In View 1, the passive time bar sits centered near the bottom over the wave base
                 if !show_time_bar_under_artist {
                     let bar_y = area.bottom().saturating_sub(3);
                     let desired_bar_w = ((area.width as u32 * 22) / 100).clamp(18, 36) as u16;
@@ -254,7 +253,7 @@ impl App {
                 }
             }
 
-            // En Vue 2 (Split Lyrics — Image 1), les paroles occupent toute la hauteur à droite sans onde en bas
+            // In View 2 (Split Lyrics), synced lyrics occupy the full right column height
             if split_t > 0.12 {
                 if let Some(ref lyrics) = self.current_lyrics {
                     let right_x = area.x + left_w;
@@ -320,7 +319,7 @@ impl App {
             area.x,
             cy + 1,
             area.width,
-            "kymat · en attente d'un média",
+            "kymat · waiting for media",
             Style::default().fg(Color::Rgb(ar, ag, ab)),
         );
     }

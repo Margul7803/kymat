@@ -10,13 +10,13 @@ use tokio::sync::watch;
 #[derive(Debug, Clone)]
 pub struct CoverArtData {
     pub art_url: String,
-    /// Image RGBA source décodée (256x256 pour un échantillonnage quadrant 2x2 ultra-précis)
+    /// Decoded 256x256 RGBA source image for 2x2 Unicode quadrant sub-pixel sampling
     pub image: Arc<RgbaImage>,
-    /// Palette Oklab extraite de la pochette
+    /// Oklab theme palette extracted from the album cover
     pub palette: ThemePalette,
 }
 
-/// Décode une URL `file://` ou télécharge une URL `http(s)://` et extrait la palette Oklab.
+/// Decodes a `file://` path or downloads an `http(s)://` URL and extracts the Oklab palette.
 pub async fn load_cover_and_palette(art_url: &str) -> Option<CoverArtData> {
     if art_url.trim().is_empty() {
         return None;
@@ -57,8 +57,7 @@ pub fn process_dynamic_image(art_url: &str, img: &DynamicImage) -> CoverArtData 
     let thumb = img.resize_exact(256, 256, FilterType::Lanczos3);
     let rgb_img = thumb.to_rgb8();
 
-    // Filtrer les pixels quasi-blancs ou quasi-noirs pour que color-thief extraie les vraies
-    // teintes chromatiques de la pochette (ex: le rose corail et le vert d'eau sur Alizée)
+    // Filter out near-white and near-black pixels so color-thief extracts the true chromatic hues
     let mut filtered_rgb: Vec<u8> = Vec::with_capacity(256 * 256 * 3);
     for p in rgb_img.pixels() {
         let [r, g, b] = p.0;
@@ -89,7 +88,7 @@ pub fn process_dynamic_image(art_url: &str, img: &DynamicImage) -> CoverArtData 
     }
 }
 
-/// Worker asynchrone qui surveille les changements d'`art_url` et met en cache les pochettes décodées
+/// Asynchronous worker watching `art_url` changes and caching decoded album covers
 pub fn spawn_cover_worker(
     mut url_rx: watch::Receiver<String>,
 ) -> watch::Receiver<Option<CoverArtData>> {
