@@ -1,6 +1,8 @@
-use clap::{Parser, ValueEnum};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum, Default)]
@@ -19,6 +21,9 @@ pub enum DisplayMode {
     about = "High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)"
 )]
 pub struct CliArgs {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Enable screensaver mode (exits immediately on any key press or mouse movement/click, except Tab)
     #[arg(long)]
     pub screensaver: bool,
@@ -38,6 +43,28 @@ pub struct CliArgs {
     /// Show live FPS and frame time counter in the top-right corner
     #[arg(long)]
     pub debug_fps: bool,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Manage Kymat configuration (view, edit, locate config.toml)
+    Config(ConfigArgs),
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: Option<ConfigAction>,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAction {
+    /// Open config.toml in your default editor ($VISUAL, $EDITOR, or nano/micro/vim)
+    Edit,
+    /// Print the absolute path to config.toml
+    Path,
+    /// Print the current configuration file contents
+    Show,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,7 +166,7 @@ impl AppConfig {
         }
     }
 
-    fn default_toml_template() -> &'static str {
+    pub fn default_toml_template() -> &'static str {
         r#"fps = 144
 font_size = 12
 # Default view mode: "lyrics" or "soundwave"
@@ -155,6 +182,121 @@ layout_transition_secs = 0.6
     }
 }
 
+pub fn handle_config_command(args: &ConfigArgs) -> Result<()> {
+    let action = args.action.as_ref().unwrap_or(&ConfigAction::Edit);
+    let path = AppConfig::config_path()
+        .context("Could not determine configuration directory ($XDG_CONFIG_HOME or ~/.config)")?;
+
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, AppConfig::default_toml_template())?;
+    }
+
+    match action {
+        ConfigAction::Path => {
+            println!("{}", path.display());
+            Ok(())
+        }
+        ConfigAction::Show => {
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            print!("{}", content);
+            Ok(())
+        }
+        ConfigAction::Edit => {
+            let is_term = std::io::stdin().is_terminal();
+
+            if is_term {
+                let editor = get_terminal_editor();
+                let parts: Vec<&str> = editor.split_whitespace().collect();
+                if parts.is_empty() {
+                    bail!("No editor command specified");
+                }
+                let cmd = parts[0];
+                let cmd_args = &parts[1..];
+
+                let status = std::process::Command::new(cmd)
+                    .args(cmd_args)
+                    .arg(&path)
+                    .status();
+
+                match status {
+                    Ok(exit_status) => {
+                        if !exit_status.success() {
+                            eprintln!("Editor exited with status: {}", exit_status);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        for fallback in ["nano", "micro", "nvim", "vim", "vi"] {
+                            if cmd != fallback && binary_exists(fallback) {
+                                eprintln!(
+                                    "'{}' failed ({}), falling back to '{}'...",
+                                    cmd, e, fallback
+                                );
+                                let _ = std::process::Command::new(fallback).arg(&path).status();
+                                return Ok(());
+                            }
+                        }
+                        bail!(
+                            "Failed to launch editor '{}': {}. Please set your $EDITOR environment variable.",
+                            editor,
+                            e
+                        );
+                    }
+                }
+            } else {
+                // Invoked outside an interactive TTY (e.g. desktop menu / application launcher)
+                if binary_exists("omarchy-launch-editor") {
+                    let _ = std::process::Command::new("omarchy-launch-editor")
+                        .arg(&path)
+                        .spawn();
+                    Ok(())
+                } else if binary_exists("xdg-open") {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&path)
+                        .spawn();
+                    Ok(())
+                } else {
+                    let editor = get_terminal_editor();
+                    let parts: Vec<&str> = editor.split_whitespace().collect();
+                    let cmd = parts[0];
+                    let cmd_args = &parts[1..];
+                    let _ = std::process::Command::new(cmd).args(cmd_args).arg(&path).status();
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+fn get_terminal_editor() -> String {
+    std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| {
+            for candidate in ["micro", "nano", "nvim", "vim", "vi"] {
+                if binary_exists(candidate) {
+                    return candidate.to_string();
+                }
+            }
+            "nano".to_string()
+        })
+}
+
+fn binary_exists(bin: &str) -> bool {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let full_path = dir.join(bin);
+            if full_path.is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +304,7 @@ mod tests {
     #[test]
     fn test_default_config_and_cli_override() {
         let cli = CliArgs {
+            command: None,
             screensaver: true,
             fps: Some(120),
             font_size: Some(12),
@@ -176,5 +319,38 @@ mod tests {
         assert!(!AppConfig::default().rat_easter_egg);
         assert!((cfg.attack_lambda - 35.0).abs() < f32::EPSILON);
         assert!((cfg.decay_lambda - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_config_subcommands_parsing() {
+        let cli_default_config = CliArgs::try_parse_from(["kymat", "config"]).unwrap();
+        assert_eq!(
+            cli_default_config.command,
+            Some(Command::Config(ConfigArgs { action: None }))
+        );
+
+        let cli_edit = CliArgs::try_parse_from(["kymat", "config", "edit"]).unwrap();
+        assert_eq!(
+            cli_edit.command,
+            Some(Command::Config(ConfigArgs {
+                action: Some(ConfigAction::Edit)
+            }))
+        );
+
+        let cli_path = CliArgs::try_parse_from(["kymat", "config", "path"]).unwrap();
+        assert_eq!(
+            cli_path.command,
+            Some(Command::Config(ConfigArgs {
+                action: Some(ConfigAction::Path)
+            }))
+        );
+
+        let cli_show = CliArgs::try_parse_from(["kymat", "config", "show"]).unwrap();
+        assert_eq!(
+            cli_show.command,
+            Some(Command::Config(ConfigArgs {
+                action: Some(ConfigAction::Show)
+            }))
+        );
     }
 }

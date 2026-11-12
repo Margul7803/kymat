@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Kymat
+Comment=High-frequency (144 FPS) ASCII music screensaver
+Exec=kymat
+Icon=applications-multimedia
+Terminal=true
+Categories=AudioVideo;Audio;Visualization;
+Keywords=screensaver;ascii;music;visualizer;lyrics;
+Actions=EditConfig;Screensaver;
+
+[Desktop Action EditConfig]
+Name=Edit Configuration
+Exec=kymat config edit
+
+[Desktop Action Screensaver]
+Name=Launch Screensaver Mode
+Exec=kymat --screensaver

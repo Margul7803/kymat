@@ -43,6 +43,7 @@ cargo build --release
 install -Dm755 target/release/kymat ~/.local/bin/kymat
 install -Dm644 foot-kymat.ini ~/.config/kymat/foot-kymat.ini
 install -Dm644 config.toml.example ~/.config/kymat/config.toml
+install -Dm644 assets/kymat.desktop ~/.local/share/applications/kymat.desktop
 ```
 
 ---
@@ -81,7 +82,20 @@ Both screensavers wake up and close together as soon as you move the mouse or pr
 
 ## Configuration
 
-Optional settings can be customized in `~/.config/kymat/config.toml`:
+Settings can be managed directly via the CLI or edited in `~/.config/kymat/config.toml`:
+
+```bash
+# Open configuration in your default editor ($VISUAL, $EDITOR, or nano/micro/vim)
+kymat config edit
+
+# Display the absolute path to your config file
+kymat config path
+
+# View current configuration contents
+kymat config show
+```
+
+### Config File Options (`~/.config/kymat/config.toml`)
 
 ```toml
 fps = 144

@@ -27,6 +27,11 @@ use std::time::{Duration, Instant};
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = CliArgs::parse();
+
+    if let Some(crate::config::Command::Config(ref config_args)) = cli.command {
+        return crate::config::handle_config_command(config_args);
+    }
+
     let config = AppConfig::load(&cli);
 
     // Under Hyprland/Wayland, terminals (foot/alacritty/ghostty) briefly spawn at 80x24
