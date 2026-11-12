@@ -53,8 +53,11 @@ primary_monitor=$(hyprctl monitors -j | jq -r '
   end
 ')
 
+KYMAT_CFG="$HOME/.config/kymat/config.toml"
 KYMAT_FOOT_CFG="$HOME/.config/kymat/foot-kymat.ini"
 KYMAT_RUNNER="$HOME/.local/bin/kymat-screensaver-runner"
+KYMAT_FONT_SIZE=$(awk -F'=' '/^[[:space:]]*font_size[[:space:]]*=/ { gsub(/[^0-9]/, "", $2); if ($2 != "") print $2; exit }' "$KYMAT_CFG" 2>/dev/null)
+KYMAT_FONT_SIZE=${KYMAT_FONT_SIZE:-12}
 
 while read -r m special; do
   hypr_focus_monitor "$m"
@@ -81,16 +84,16 @@ while read -r m special; do
     # Secondary monitor(s): launch Kymat musical screensaver
     case $terminal in
     *Alacritty*)
-      hypr_exec alacritty --class=org.omarchy.screensaver --config-file "$OMARCHY_PATH/default/alacritty/screensaver.toml" -o font.size=12 -e "$KYMAT_RUNNER"
+      hypr_exec alacritty --class=org.omarchy.screensaver --config-file "$OMARCHY_PATH/default/alacritty/screensaver.toml" -o "font.size=$KYMAT_FONT_SIZE" -e "$KYMAT_RUNNER"
       ;;
     *ghostty*)
-      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=12 -e "$KYMAT_RUNNER"
+      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size="$KYMAT_FONT_SIZE" -e "$KYMAT_RUNNER"
       ;;
     *foot*)
-      hypr_exec foot --app-id=org.omarchy.screensaver --config="$KYMAT_FOOT_CFG" -e "$KYMAT_RUNNER"
+      hypr_exec foot --app-id=org.omarchy.screensaver --config="$KYMAT_FOOT_CFG" -f "JetBrainsMono Nerd Font:size=$KYMAT_FONT_SIZE" -e "$KYMAT_RUNNER"
       ;;
     *kitty*)
-      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=12 --override window_padding_width=0 -e "$KYMAT_RUNNER"
+      hypr_exec kitty --class=org.omarchy.screensaver --override "font_size=$KYMAT_FONT_SIZE" --override window_padding_width=0 -e "$KYMAT_RUNNER"
       ;;
     esac
   fi

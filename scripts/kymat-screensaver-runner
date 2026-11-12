@@ -45,6 +45,6 @@ wait_for_terminal_resize
 WATCHER_PID=$!
 
 # Run kymat in foreground so it owns the TTY for raw mode and keyboard/mouse wake events
-"$HOME/.local/bin/kymat" --screensaver --fps 144
+"$HOME/.local/bin/kymat" --screensaver
 
 exit_screensaver
