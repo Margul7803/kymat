@@ -235,6 +235,10 @@ impl App {
                 show_time_bar_under_artist,
             };
 
+            let cell_aspect = self
+                .cover_cache
+                .cell_aspect_for_window(area.width, area.height);
+
             render_cover_and_meta(
                 left_area,
                 buf,
@@ -242,6 +246,7 @@ impl App {
                 self.current_cover.as_ref(),
                 &mut self.cover_cache,
                 &meta_view,
+                cell_aspect,
             );
 
             // Render Braille soundwave only in View 1 (No-Lyrics mode)
@@ -298,7 +303,7 @@ impl App {
         if self.rat_easter_egg.is_visible() {
             let cell_aspect = self
                 .cover_cache
-                .cell_aspect_for_area(area.width, area.height);
+                .cell_aspect_for_window(area.width, area.height);
             self.rat_easter_egg
                 .render(area, buf, &self.bg, cell_aspect);
         }

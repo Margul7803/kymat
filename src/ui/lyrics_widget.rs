@@ -25,6 +25,8 @@ const ENTRY_GAP_ROWS: i32 = 1;
 struct CachedSubLine {
     /// Sharp unblurred sub-pixel grid of size `max_sub_w * 8`
     sharp_grid: Vec<f32>,
+    /// Pre-blurred sub-pixel grid for inactive lines, computed once at layout time
+    blurred_grid: Vec<f32>,
     used_sub_w: usize,
 }
 
@@ -43,8 +45,6 @@ pub struct LyricsScrollState {
     cached_wrap_chars: usize,
     cached_max_sub_w: usize,
     entries: Vec<CachedLyricEntry>,
-    work_grid: Vec<f32>,
-    blur_temp: Vec<f32>,
 }
 
 impl LyricsScrollState {
@@ -91,18 +91,24 @@ impl LyricsScrollState {
         self.entries.clear();
         self.entries.reserve(lyrics.lines.len());
 
-        let grid_len = max_sub_w * SUB_H;
-        self.work_grid.resize(grid_len, 0.0);
-        self.blur_temp.resize(grid_len, 0.0);
-
+        let mut blur_temp = vec![0.0_f32; max_sub_w * SUB_H];
         let mut cursor_y = 0i32;
         for line in &lyrics.lines {
             let wrapped = wrap_lyric_text(&line.text, wrap_chars);
             let mut sub_lines = Vec::with_capacity(wrapped.len());
             for sub_text in &wrapped {
                 let (sharp_grid, used_sub_w) = rasterize_line_subpixels(sub_text, max_sub_w);
+                let mut blurred_grid = sharp_grid.clone();
+                apply_gaussian_blur_in_place(
+                    &mut blurred_grid,
+                    &mut blur_temp,
+                    max_sub_w,
+                    SUB_H,
+                    0.65,
+                );
                 sub_lines.push(CachedSubLine {
                     sharp_grid,
+                    blurred_grid,
                     used_sub_w,
                 });
             }
@@ -444,30 +450,20 @@ pub fn render_synced_lyrics(
                 (rel_rows / max_below_rows.max(10.0)).clamp(0.0, 1.0)
             };
 
-            let (blur_strength, depth_fade) = if is_active {
-                (0.0, 0.0)
+            let depth_fade = if is_active {
+                0.0
             } else {
-                let blur = (0.30 + norm_dist * 0.70).clamp(0.25, 1.0);
-                let fade = (0.42 + norm_dist.powf(1.1) * 0.46 + (entry_dist * 0.025).min(0.10))
-                    .clamp(0.42, 0.90);
-                (blur, fade)
+                (0.42 + norm_dist.powf(1.1) * 0.46 + (entry_dist * 0.025).min(0.10))
+                    .clamp(0.42, 0.90)
             };
 
             let effective_fade = 1.0 - (1.0 - depth_fade) * opacity.clamp(0.0, 1.0);
             let base_ok = if is_active { white_ok } else { inactive_base_ok };
 
-            let grid_slice: &[f32] = if blur_strength > 0.0 {
-                scroll.work_grid.copy_from_slice(&sub_line.sharp_grid);
-                apply_gaussian_blur_in_place(
-                    &mut scroll.work_grid,
-                    &mut scroll.blur_temp,
-                    max_sub_w,
-                    SUB_H,
-                    blur_strength,
-                );
-                &scroll.work_grid
-            } else {
+            let grid_slice: &[f32] = if is_active {
                 &sub_line.sharp_grid
+            } else {
+                &sub_line.blurred_grid
             };
 
             let used_cells_w = sub_line.used_sub_w.div_ceil(2);

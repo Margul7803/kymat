@@ -96,7 +96,6 @@ impl Default for RatEasterEgg {
 
 impl RatEasterEgg {
     pub fn new() -> Self {
-        let _ = decoded_rat_frames();
         Self {
             manual_override: false,
             frame_cursor: 0.0,

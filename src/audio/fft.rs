@@ -96,10 +96,6 @@ impl FftAnalyzer {
         }
     }
 
-    pub fn push_samples(&mut self, samples: &[f32], sensitivity: f32) -> [f32; NUM_BANDS] {
-        self.push_samples_telemetry(samples, sensitivity).bands
-    }
-
     pub fn push_samples_telemetry(
         &mut self,
         samples: &[f32],
@@ -229,13 +225,13 @@ mod tests {
     fn test_fft_analyzer_silence_and_sine_wave() {
         let mut analyzer = FftAnalyzer::new();
         let silence = vec![0.0_f32; FFT_SIZE];
-        let out_silent = analyzer.push_samples(&silence, 1.0);
+        let out_silent = analyzer.push_samples_telemetry(&silence, 1.0).bands;
         assert!(out_silent.iter().all(|&v| v == 0.0));
 
         let sine: Vec<f32> = (0..FFT_SIZE)
             .map(|n| (2.0 * PI * 440.0 * (n as f32) / SAMPLE_RATE).sin() * 0.5)
             .collect();
-        let out_sine = analyzer.push_samples(&sine, 1.2);
+        let out_sine = analyzer.push_samples_telemetry(&sine, 1.2).bands;
         let max_band = out_sine.iter().copied().fold(0.0_f32, f32::max);
         assert!(
             max_band > 0.3,
@@ -262,8 +258,8 @@ mod tests {
             })
             .collect();
 
-        let bands_low = analyzer_low.push_samples(&low_vol, 1.15);
-        let bands_high = analyzer_high.push_samples(&high_vol, 1.15);
+        let bands_low = analyzer_low.push_samples_telemetry(&low_vol, 1.15).bands;
+        let bands_high = analyzer_high.push_samples_telemetry(&high_vol, 1.15).bands;
 
         for i in 0..NUM_BANDS {
             assert!(

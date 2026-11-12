@@ -48,14 +48,19 @@ pub struct ScaledCoverCache {
 
 impl ScaledCoverCache {
     /// Queries the terminal's physical pixel dimensions (via `TIOCGWINSZ`) only when the
-    /// cell grid dimensions change, returning the exact cell height/width pixel ratio so
+    /// terminal window dimensions change, returning the exact cell height/width pixel ratio so
     /// the album cover renders as a true 1:1 physical square on screen.
-    pub fn cell_aspect_for_area(&mut self, area_w: u16, area_h: u16) -> f32 {
-        if self.cached_term_dims != (area_w, area_h) || self.cached_cell_aspect <= 0.0 {
-            self.cached_term_dims = (area_w, area_h);
+    pub fn cell_aspect_for_window(&mut self, term_w: u16, term_h: u16) -> f32 {
+        if self.cached_term_dims != (term_w, term_h) || self.cached_cell_aspect <= 0.0 {
+            self.cached_term_dims = (term_w, term_h);
             self.cached_cell_aspect = detect_terminal_cell_aspect();
         }
         self.cached_cell_aspect
+    }
+
+    #[inline]
+    pub fn cell_aspect_for_area(&mut self, term_w: u16, term_h: u16) -> f32 {
+        self.cell_aspect_for_window(term_w, term_h)
     }
 
     pub fn ensure_cells(
@@ -246,6 +251,7 @@ pub fn render_cover_and_meta(
     cover: Option<&CoverArtData>,
     cache: &mut ScaledCoverCache,
     meta: &CoverMetaView<'_>,
+    cell_aspect: f32,
 ) {
     if area.width < 14 || area.height < 10 {
         return;
@@ -257,7 +263,6 @@ pub fn render_cover_and_meta(
         3u16
     };
 
-    let cell_aspect = cache.cell_aspect_for_area(area.width, area.height);
     let desired_h = ((area.height as u32 * 52) / 100) as u16;
     let max_cover_h = area.height.saturating_sub(meta_rows + 3).min(38);
     let max_cover_w = area.width.saturating_sub(6);
@@ -639,7 +644,8 @@ mod tests {
             show_time_bar_under_artist: true,
         };
 
-        render_cover_and_meta(area, &mut buf, &bg, None, &mut cache, &meta);
+        let cell_aspect = cache.cell_aspect_for_window(area.width, area.height);
+        render_cover_and_meta(area, &mut buf, &bg, None, &mut cache, &meta, cell_aspect);
 
         // Verify that the cached cell aspect produces a true square (~2.25 cols per row)
         assert!((cache.cached_cell_aspect - 2.25).abs() < 0.35);

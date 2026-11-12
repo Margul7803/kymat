@@ -117,10 +117,18 @@ pub fn render_braille_wave(
                 compute_cell_braille_mask(row, area.height, h2_l, h2_r, prev2_l, next2_r);
 
             let cell_center_sub_y = (row * 4 + 2) as f32;
+            let combined_mask = mask1 | mask2;
+            let in_gradient = cell_center_sub_y >= crest1_sub_y - 1.5;
+
+            // Empty cells above the crest already have their background rendered by AmbientBackground
+            if combined_mask == 0 && !in_gradient {
+                continue;
+            }
+
             let base_oklab = bg.oklab_at(screen_x, screen_y);
 
             // Gradient fill below the crest fading smoothly to #050508 at the bottom
-            let bg_rgb = if cell_center_sub_y >= crest1_sub_y - 1.5 {
+            let bg_rgb = if in_gradient {
                 let dist_from_crest = (cell_center_sub_y - crest1_sub_y).max(0.0);
                 let norm_depth = (dist_from_crest / avg_h1.max(4.0)).clamp(0.0, 1.0);
                 let vertical_fade = (1.0 - norm_depth).powf(1.55);
@@ -135,7 +143,6 @@ pub fn render_braille_wave(
 
             if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
                 cell.set_bg(Color::Rgb(bg_rgb.0, bg_rgb.1, bg_rgb.2));
-                let combined_mask = mask1 | mask2;
                 if combined_mask != 0 {
                     let fg_ok = if is_crest1 {
                         let bright = lerp_oklab(palette.accent, white_ok, 0.22);
