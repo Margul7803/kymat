@@ -14,9 +14,6 @@ Kymat reacts in real time to whatever music is playing on your desktop — displ
 ### Soundwave View
 ![Kymat Soundwave View](assets/wave-view.png)
 
-### Dancing Rat Easter Egg (`r`)
-![Kymat Dancing Rat Easter Egg](assets/easter-egg-view.png)
-
 ---
 
 ## Highlights
