@@ -6,3 +6,4 @@ decay_lambda = 12.0
 background_transition_secs = 1.5
 layout_transition_secs = 0.6
 auto_lyrics_split = true
+rat_easter_egg = true

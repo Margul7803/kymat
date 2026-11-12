@@ -60,6 +60,7 @@ kymat
 | Key | Action |
 | --- | --- |
 | `Tab` | Switch between **Lyrics View** and **Soundwave View** |
+| `r` | Toggle the **Dancing Rat Easter Egg** in the center of the screen |
 | `q` / `Esc` | Quit (in normal mode) |
 | Any key / Mouse move | Exit screensaver (when launched with `--screensaver`) |
 
@@ -91,6 +92,7 @@ decay_lambda = 12.0
 background_transition_secs = 1.5
 layout_transition_secs = 0.6
 auto_lyrics_split = true
+rat_easter_egg = true
 ```
 
 ## License

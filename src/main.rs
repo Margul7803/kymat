@@ -99,6 +99,12 @@ async fn run_event_loop(
                         app.config.auto_lyrics_split = !app.config.auto_lyrics_split;
                         continue;
                     }
+                    if matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+                        && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        app.rat_easter_egg.toggle_manual();
+                        continue;
+                    }
                     if cli.screensaver {
                         return Ok(());
                     }

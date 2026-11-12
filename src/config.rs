@@ -37,6 +37,7 @@ pub struct AppConfig {
     pub background_transition_secs: f32,
     pub layout_transition_secs: f32,
     pub auto_lyrics_split: bool,
+    pub rat_easter_egg: bool,
 }
 
 impl Default for AppConfig {
@@ -50,6 +51,7 @@ impl Default for AppConfig {
             background_transition_secs: 1.5,
             layout_transition_secs: 0.6,
             auto_lyrics_split: true,
+            rat_easter_egg: true,
         }
     }
 }
@@ -118,6 +120,7 @@ decay_lambda = 12.0
 background_transition_secs = 1.5
 layout_transition_secs = 0.6
 auto_lyrics_split = true
+rat_easter_egg = true
 "#
     }
 }

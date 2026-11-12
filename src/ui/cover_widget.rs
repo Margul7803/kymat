@@ -177,7 +177,7 @@ fn avg_rgb(sum_r: u32, sum_g: u32, sum_b: u32, count: u32, fallback: Rgb) -> Rgb
 
 /// Selects the 2x2 Unicode quadrant glyph (`▀`, `▌`, `▞`, `▛`, etc.) and `(fg, bg)` pair
 /// minimizing squared RGB error across the 4 sub-pixels of a terminal cell.
-fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
+pub(crate) fn best_quadrant_cell(pixels: [Rgb; 4]) -> (char, Rgb, Rgb) {
     let mut best_err = u32::MAX;
     let mut best_ch = '▀';
     let mut best_fg = pixels[0];

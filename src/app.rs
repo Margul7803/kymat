@@ -10,6 +10,7 @@ use crate::ui::cover_widget::{
     render_passive_time_bar,
 };
 use crate::ui::lyrics_widget::{LyricsRenderParams, LyricsScrollState, render_synced_lyrics};
+use crate::ui::rat_widget::RatEasterEgg;
 use crate::ui::transitions::LayoutTransition;
 use crate::ui::wave_widget::render_braille_wave;
 use ratatui::buffer::Buffer;
@@ -41,6 +42,7 @@ pub struct App {
     wave_sec_sub_cols: Vec<f32>,
     pub layout_transition: LayoutTransition,
     lyrics_scroll: LyricsScrollState,
+    pub rat_easter_egg: RatEasterEgg,
 
     frame_times: [f32; 60],
     frame_idx: usize,
@@ -86,6 +88,7 @@ impl App {
             wave_sec_sub_cols: Vec::with_capacity(512),
             layout_transition,
             lyrics_scroll: LyricsScrollState::default(),
+            rat_easter_egg: RatEasterEgg::new(),
             frame_times: [1.0 / 144.0; 60],
             frame_idx: 0,
             measured_fps: 144.0,
@@ -139,6 +142,8 @@ impl App {
         let raw_bands = *self.audio_rx.borrow();
         let is_playing = self.current_mpris.clock.status == PlaybackStatus::Playing;
         self.smoother.step(&raw_bands, dt, is_playing);
+        self.rat_easter_egg
+            .step(&raw_bands, dt, is_playing, self.config.rat_easter_egg);
 
         self.bg
             .update_and_ensure_cache(term_width, term_height, split_t, now);
@@ -277,6 +282,14 @@ impl App {
                     }
                 }
             }
+        }
+
+        if self.rat_easter_egg.is_visible() {
+            let cell_aspect = self
+                .cover_cache
+                .cell_aspect_for_area(area.width, area.height);
+            self.rat_easter_egg
+                .render(area, buf, &self.bg, cell_aspect);
         }
 
         if self.debug_fps {
