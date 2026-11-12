@@ -1,4 +1,4 @@
-use crate::audio::fft::NUM_BANDS;
+use crate::audio::fft::AudioTelemetry;
 use crate::audio::smoother::SpectrumSmoother;
 use crate::config::AppConfig;
 use crate::media::cover::{CoverArtData, spawn_cover_worker};
@@ -10,7 +10,7 @@ use crate::ui::cover_widget::{
     render_passive_time_bar,
 };
 use crate::ui::lyrics_widget::{LyricsRenderParams, LyricsScrollState, render_synced_lyrics};
-use crate::ui::rat_widget::RatEasterEgg;
+use crate::ui::rat_widget::{ClimaxContext, RatEasterEgg};
 use crate::ui::transitions::LayoutTransition;
 use crate::ui::wave_widget::render_braille_wave;
 use ratatui::buffer::Buffer;
@@ -23,7 +23,7 @@ pub struct App {
     pub config: AppConfig,
     pub debug_fps: bool,
     mpris_rx: watch::Receiver<MprisState>,
-    audio_rx: watch::Receiver<[f32; NUM_BANDS]>,
+    audio_rx: watch::Receiver<AudioTelemetry>,
     cover_rx: watch::Receiver<Option<CoverArtData>>,
     lyrics_rx: watch::Receiver<Option<SyncedLyrics>>,
     art_url_tx: watch::Sender<String>,
@@ -53,7 +53,7 @@ impl App {
     pub fn new(
         config: AppConfig,
         debug_fps: bool,
-        audio_rx: watch::Receiver<[f32; NUM_BANDS]>,
+        audio_rx: watch::Receiver<AudioTelemetry>,
     ) -> Self {
         let mpris_rx = spawn_mpris_watcher();
         let (art_url_tx, art_url_rx) = watch::channel(String::new());
@@ -109,6 +109,7 @@ impl App {
             if track_key != self.last_track_key {
                 self.last_track_key = track_key;
                 self.lyrics_scroll.reset();
+                self.rat_easter_egg.reset_for_new_track();
                 self.current_lyrics = None;
                 let _ = self.meta_tx.send(self.current_mpris.metadata.clone());
             }
@@ -139,11 +140,21 @@ impl App {
         self.layout_transition.set_split_active(should_split, now);
         let split_t = self.layout_transition.update(now);
 
-        let raw_bands = *self.audio_rx.borrow();
+        let telemetry = *self.audio_rx.borrow();
         let is_playing = self.current_mpris.clock.status == PlaybackStatus::Playing;
-        self.smoother.step(&raw_bands, dt, is_playing);
-        self.rat_easter_egg
-            .step(&raw_bands, dt, is_playing, self.config.rat_easter_egg);
+        self.smoother.step(&telemetry.bands, dt, is_playing);
+
+        let track_pos = self.current_mpris.clock.position_at(now);
+        let track_duration = self.current_mpris.metadata.duration;
+        self.rat_easter_egg.step(&ClimaxContext {
+            telemetry: &telemetry,
+            dt,
+            is_playing,
+            auto_enabled: self.config.rat_easter_egg,
+            track_pos,
+            track_duration,
+            lyrics: self.current_lyrics.as_ref(),
+        });
 
         self.bg
             .update_and_ensure_cache(term_width, term_height, split_t, now);
@@ -346,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn test_full_frame_render_budget_under_6ms_at_144fps() {
         let cfg = AppConfig::default();
-        let (_tx, audio_rx) = watch::channel([0.35_f32; NUM_BANDS]);
+        let (_tx, audio_rx) = watch::channel(AudioTelemetry::default());
         let mut app = App::new(cfg, true, audio_rx);
 
         app.current_lyrics = parse_lrc(

@@ -20,15 +20,26 @@ pub struct LyricLine {
     pub end: Duration,
     pub text: String,
     pub words: Vec<LyricWord>,
+    pub is_chorus: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncedLyrics {
     pub source: String,
     pub lines: Vec<LyricLine>,
+    pub has_detected_chorus: bool,
 }
 
 impl SyncedLyrics {
+    pub fn new(source: String, mut lines: Vec<LyricLine>) -> Self {
+        let has_detected_chorus = annotate_chorus_sections(&mut lines);
+        Self {
+            source,
+            lines,
+            has_detected_chorus,
+        }
+    }
+
     /// Binary search for the active lyric line at playback time `pos`
     pub fn active_line_index(&self, pos: Duration) -> Option<usize> {
         if self.lines.is_empty() {
@@ -40,6 +51,106 @@ impl SyncedLyrics {
             Err(insert_idx) => Some(insert_idx - 1),
         }
     }
+
+    /// Returns a `[0.0, 1.0]` chorus/hook affinity score at playback position `pos`.
+    /// Used by the climax detector to boost confidence during repeated chorus stanzas.
+    pub fn chorus_affinity_at(&self, pos: Duration) -> f32 {
+        let Some(idx) = self.active_line_index(pos) else {
+            return 0.0;
+        };
+        let active = &self.lines[idx];
+        let in_active_window =
+            pos >= active.start && pos <= active.end + Duration::from_millis(1800);
+
+        // Check if the next line starts within 0.65s (anticipate chorus entrance on the drop)
+        let imminent_chorus = self
+            .lines
+            .get(idx + 1)
+            .is_some_and(|next| {
+                next.is_chorus && next.start.saturating_sub(pos) <= Duration::from_millis(650)
+            });
+
+        if self.has_detected_chorus {
+            if (in_active_window && active.is_chorus) || imminent_chorus {
+                1.0
+            } else {
+                0.0
+            }
+        } else if in_active_window && !active.text.is_empty() {
+            0.35
+        } else {
+            0.0
+        }
+    }
+}
+
+fn normalize_lyric_key(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_space = true;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            for lc in ch.to_lowercase() {
+                out.push(lc);
+            }
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Identifies repeated chorus/hook lines across the track (separated by >= 12s)
+/// and fills 1-line gaps inside chorus stanzas.
+fn annotate_chorus_sections(lines: &mut [LyricLine]) -> bool {
+    if lines.len() < 4 {
+        return false;
+    }
+
+    let keys: Vec<String> = lines.iter().map(|l| normalize_lyric_key(&l.text)).collect();
+    let mut first_seen: HashMap<&str, Duration> = HashMap::new();
+    let mut repeated_keys: HashMap<&str, bool> = HashMap::new();
+
+    for (i, key) in keys.iter().enumerate() {
+        // Ignore trivial vocalizations or empty markers (< 6 chars)
+        if key.len() < 6 {
+            continue;
+        }
+        let t = lines[i].start;
+        if let Some(&first_t) = first_seen.get(key.as_str()) {
+            if t.saturating_sub(first_t) >= Duration::from_secs(12) {
+                repeated_keys.insert(key.as_str(), true);
+            }
+        } else {
+            first_seen.insert(key.as_str(), t);
+        }
+    }
+
+    let mut any_chorus = false;
+    for (i, line) in lines.iter_mut().enumerate() {
+        if repeated_keys.contains_key(keys[i].as_str()) {
+            line.is_chorus = true;
+            any_chorus = true;
+        }
+    }
+
+    if !any_chorus {
+        return false;
+    }
+
+    // Bridge single non-repeated lines sandwiched inside a repeated chorus stanza
+    for i in 1..lines.len().saturating_sub(1) {
+        if !lines[i].is_chorus
+            && lines[i - 1].is_chorus
+            && lines[i + 1].is_chorus
+            && lines[i + 1].start.saturating_sub(lines[i - 1].start) <= Duration::from_secs(14)
+        {
+            lines[i].is_chorus = true;
+        }
+    }
+
+    true
 }
 
 // --- Sonora SQLite JSON schema structures ---
@@ -145,15 +256,13 @@ pub fn parse_sonora_lyrics_json(raw_json: &str) -> Option<SyncedLyrics> {
                 end: l.end.into_std(),
                 text,
                 words,
+                is_chorus: false,
             });
         }
 
         parsed_lines.sort_by_key(|l| l.start);
 
-        let candidate = SyncedLyrics {
-            source: format!("Sonora ({})", hit.source),
-            lines: parsed_lines,
-        };
+        let candidate = SyncedLyrics::new(format!("Sonora ({})", hit.source), parsed_lines);
 
         let rank = (hit.trust, word_count);
         if best_hit
@@ -217,6 +326,7 @@ pub fn parse_lrc(lrc_text: &str, source_label: &str) -> Option<SyncedLyrics> {
             end: start + Duration::from_secs(4),
             text,
             words: Vec::new(),
+            is_chorus: false,
         });
     }
 
@@ -229,10 +339,7 @@ pub fn parse_lrc(lrc_text: &str, source_label: &str) -> Option<SyncedLyrics> {
         lines[i].end = lines[i + 1].start;
     }
 
-    Some(SyncedLyrics {
-        source: source_label.to_string(),
-        lines,
-    })
+    Some(SyncedLyrics::new(source_label.to_string(), lines))
 }
 
 fn parse_lrc_timestamp(tag: &str) -> Option<Duration> {

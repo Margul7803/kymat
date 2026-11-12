@@ -7,6 +7,34 @@ pub const HOP_SIZE: usize = 512;
 pub const SAMPLE_RATE: f32 = 44_100.0;
 pub const NUM_BANDS: usize = 48;
 
+/// Complete real-time audio telemetry combining the volume-invariant visual spectrum
+/// with intra-song dynamic and rhythmic descriptors for musical climax ("temps fort") detection.
+#[derive(Debug, Clone, Copy)]
+pub struct AudioTelemetry {
+    /// Volume-independent normalized spectrum (48 bands in `[0.0, 1.0]`) for the visual soundwave
+    pub bands: [f32; NUM_BANDS],
+    /// Un-normalized broadband RMS energy of the 2048-sample window (preserves verse vs chorus contrast)
+    pub raw_rms: f32,
+    /// Un-normalized sub-bass/kick energy (`45–150 Hz`, bands `0..9`)
+    pub raw_bass_energy: f32,
+    /// Volume-invariant positive spectral onset flux (percussive attack density in `[0.0, 1.0]`)
+    pub spectral_flux: f32,
+    /// Volume-invariant geometric balance across bass, mids, and highs in `[0.0, 1.0]`
+    pub spectral_fullness: f32,
+}
+
+impl Default for AudioTelemetry {
+    fn default() -> Self {
+        Self {
+            bands: [0.0; NUM_BANDS],
+            raw_rms: 0.0,
+            raw_bass_energy: 0.0,
+            spectral_flux: 0.0,
+            spectral_fullness: 0.0,
+        }
+    }
+}
+
 pub struct FftAnalyzer {
     ring_buf: Vec<f32>,
     write_pos: usize,
@@ -17,6 +45,8 @@ pub struct FftAnalyzer {
     band_weights: Vec<f32>,
     /// Volume-independent spectral peak follower
     rolling_peak: f32,
+    /// Previous frame's normalized bands for positive spectral onset flux
+    prev_bands: [f32; NUM_BANDS],
 }
 
 impl FftAnalyzer {
@@ -62,27 +92,41 @@ impl FftAnalyzer {
             band_edges,
             band_weights,
             rolling_peak: 0.25,
+            prev_bands: [0.0; NUM_BANDS],
         }
     }
 
     pub fn push_samples(&mut self, samples: &[f32], sensitivity: f32) -> [f32; NUM_BANDS] {
+        self.push_samples_telemetry(samples, sensitivity).bands
+    }
+
+    pub fn push_samples_telemetry(
+        &mut self,
+        samples: &[f32],
+        sensitivity: f32,
+    ) -> AudioTelemetry {
         for &s in samples {
             let clean = if s.is_finite() { s } else { 0.0 };
             self.ring_buf[self.write_pos] = clean;
             self.write_pos = (self.write_pos + 1) % FFT_SIZE;
         }
 
-        // Pre-FFT window peak normalization: cancels out system volume scalar G completely
-        // so that 1% volume and 100% volume produce the exact same normalized waveform into the FFT.
+        // Pre-FFT window peak and un-normalized broadband RMS
         let mut window_peak = 0.0_f32;
+        let mut sum_sq = 0.0_f32;
         for &s in &self.ring_buf {
-            window_peak = window_peak.max(s.abs());
+            let abs_s = s.abs();
+            window_peak = window_peak.max(abs_s);
+            sum_sq += s * s;
         }
 
         // True digital silence (< -110 dB) returns zero
         if window_peak < 3.0e-6 {
-            return [0.0; NUM_BANDS];
+            self.prev_bands = [0.0; NUM_BANDS];
+            return AudioTelemetry::default();
         }
+
+        let raw_rms = (sum_sq / (FFT_SIZE as f32)).sqrt();
 
         let inv_window_peak = 1.0 / window_peak;
         for i in 0..FFT_SIZE {
@@ -111,6 +155,10 @@ impl FftAnalyzer {
             frame_max = frame_max.max(weighted);
         }
 
+        // Recover un-normalized sub-bass/kick magnitude (45-150 Hz) by scaling back by `window_peak`
+        let norm_bass_avg: f32 = raw_bands[0..9].iter().sum::<f32>() / 9.0;
+        let raw_bass_energy = norm_bass_avg * window_peak;
+
         if frame_max > self.rolling_peak {
             self.rolling_peak = self.rolling_peak * 0.65 + frame_max * 0.35;
         } else {
@@ -133,7 +181,37 @@ impl FftAnalyzer {
                 + bands[i + 1] * 0.22
                 + bands[i + 2] * 0.12;
         }
-        smoothed
+
+        // Positive spectral onset flux on sub-bass/kick (0..10) and transient highs (28..48)
+        let bass_flux: f32 = smoothed[0..10]
+            .iter()
+            .zip(&self.prev_bands[0..10])
+            .map(|(&cur, &prev)| (cur - prev).max(0.0))
+            .sum::<f32>()
+            / 10.0;
+
+        let high_flux: f32 = smoothed[28..NUM_BANDS]
+            .iter()
+            .zip(&self.prev_bands[28..NUM_BANDS])
+            .map(|(&cur, &prev)| (cur - prev).max(0.0))
+            .sum::<f32>()
+            / ((NUM_BANDS - 28) as f32);
+        self.prev_bands = smoothed;
+
+        let spectral_flux = ((bass_flux * 0.65 + high_flux * 0.35) * 4.2).clamp(0.0, 1.0);
+
+        let bass_mean: f32 = smoothed[0..12].iter().sum::<f32>() / 12.0;
+        let mid_mean: f32 = smoothed[12..34].iter().sum::<f32>() / 22.0;
+        let high_mean: f32 = smoothed[34..NUM_BANDS].iter().sum::<f32>() / 14.0;
+        let spectral_fullness = (bass_mean * mid_mean * high_mean).cbrt().clamp(0.0, 1.0);
+
+        AudioTelemetry {
+            bands: smoothed,
+            raw_rms,
+            raw_bass_energy,
+            spectral_flux,
+            spectral_fullness,
+        }
     }
 }
 

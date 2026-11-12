@@ -1,4 +1,4 @@
-use crate::audio::fft::{FftAnalyzer, HOP_SIZE, NUM_BANDS, SAMPLE_RATE};
+use crate::audio::fft::{AudioTelemetry, FftAnalyzer, HOP_SIZE, SAMPLE_RATE};
 use libpulse_binding::def::BufferAttr;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
@@ -9,8 +9,8 @@ use tokio::sync::watch;
 
 /// Spawns a dedicated real-time audio capture thread listening on `@DEFAULT_MONITOR@`
 /// via `libpulse-simple` (natively supported by `pipewire-pulse`).
-pub fn spawn_audio_capture_thread(sensitivity: f32) -> watch::Receiver<[f32; NUM_BANDS]> {
-    let (tx, rx) = watch::channel([0.0_f32; NUM_BANDS]);
+pub fn spawn_audio_capture_thread(sensitivity: f32) -> watch::Receiver<AudioTelemetry> {
+    let (tx, rx) = watch::channel(AudioTelemetry::default());
 
     thread::Builder::new()
         .name("kymat-audio-fft".to_string())
@@ -67,8 +67,8 @@ pub fn spawn_audio_capture_thread(sensitivity: f32) -> watch::Receiver<[f32; NUM
                     for (i, chunk) in byte_buf.as_chunks::<4>().0.iter().enumerate() {
                         sample_buf[i] = f32::from_le_bytes(*chunk);
                     }
-                    let bands = analyzer.push_samples(&sample_buf, sensitivity);
-                    if tx.send(bands).is_err() {
+                    let telemetry = analyzer.push_samples_telemetry(&sample_buf, sensitivity);
+                    if tx.send(telemetry).is_err() {
                         return;
                     }
                 }
