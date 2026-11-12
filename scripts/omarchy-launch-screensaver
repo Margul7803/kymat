@@ -81,16 +81,16 @@ while read -r m special; do
     # Secondary monitor(s): launch Kymat musical screensaver
     case $terminal in
     *Alacritty*)
-      hypr_exec alacritty --class=org.omarchy.screensaver --config-file "$OMARCHY_PATH/default/alacritty/screensaver.toml" -o font.size=18 -e "$KYMAT_RUNNER"
+      hypr_exec alacritty --class=org.omarchy.screensaver --config-file "$OMARCHY_PATH/default/alacritty/screensaver.toml" -o font.size=12 -e "$KYMAT_RUNNER"
       ;;
     *ghostty*)
-      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e "$KYMAT_RUNNER"
+      hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=12 -e "$KYMAT_RUNNER"
       ;;
     *foot*)
       hypr_exec foot --app-id=org.omarchy.screensaver --config="$KYMAT_FOOT_CFG" -e "$KYMAT_RUNNER"
       ;;
     *kitty*)
-      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e "$KYMAT_RUNNER"
+      hypr_exec kitty --class=org.omarchy.screensaver --override font_size=12 --override window_padding_width=0 -e "$KYMAT_RUNNER"
       ;;
     esac
   fi
