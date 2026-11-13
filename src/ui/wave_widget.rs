@@ -1,4 +1,4 @@
-use crate::ui::background::{AmbientBackground, lerp_oklab, oklab_to_rgb, rgb_to_oklab};
+use crate::ui::background::{lerp_oklab, oklab_to_rgb, rgb_to_oklab, AmbientBackground};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;

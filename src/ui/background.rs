@@ -63,8 +63,7 @@ impl ThemePalette {
             })
             .collect();
 
-        oklab_candidates
-            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        oklab_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let c_primary = oklab_candidates[0].0;
         let c_secondary = oklab_candidates
@@ -203,13 +202,7 @@ impl AmbientBackground {
         &self.current_palette
     }
 
-    pub fn update_and_ensure_cache(
-        &mut self,
-        width: u16,
-        height: u16,
-        split_t: f32,
-        now: Instant,
-    ) {
+    pub fn update_and_ensure_cache(&mut self, width: u16, height: u16, split_t: f32, now: Instant) {
         let split_bucket = (split_t.clamp(0.0, 1.0) * 10.0).round() as u8;
         let size_changed = width != self.cached_width
             || height != self.cached_height
@@ -218,7 +211,8 @@ impl AmbientBackground {
 
         if let Some(start) = self.transition_start {
             let elapsed = now.saturating_duration_since(start);
-            let t = (elapsed.as_secs_f32() / self.transition_duration.as_secs_f32()).clamp(0.0, 1.0);
+            let t =
+                (elapsed.as_secs_f32() / self.transition_duration.as_secs_f32()).clamp(0.0, 1.0);
             if t >= 1.0 {
                 self.current_palette = self.target_palette;
                 self.transition_start = None;

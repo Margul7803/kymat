@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpulse-dev \
+            libdbus-1-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package release archive & checksums
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          STAGE="kymat-${TAG}-x86_64-linux"
+          mkdir -p "$STAGE/scripts" "$STAGE/assets"
+          cp target/release/kymat "$STAGE/"
+          cp LICENSE README.md config.toml.example foot-kymat.ini "$STAGE/"
+          cp scripts/kymat-screensaver-runner scripts/omarchy-launch-screensaver "$STAGE/scripts/"
+          cp assets/kymat.desktop "$STAGE/assets/"
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            kymat-*-x86_64-linux.tar.gz
+            kymat-*-x86_64-linux.tar.gz.sha256

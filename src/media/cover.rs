@@ -1,6 +1,6 @@
 use crate::ui::background::ThemePalette;
-use color_thief::{ColorFormat, get_palette};
-use image::{DynamicImage, RgbaImage, imageops::FilterType};
+use color_thief::{get_palette, ColorFormat};
+use image::{imageops::FilterType, DynamicImage, RgbaImage};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;

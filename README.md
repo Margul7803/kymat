@@ -1,5 +1,8 @@
 # Kymat
 
+[![CI](https://github.com/Margul7803/kymat/actions/workflows/ci.yml/badge.svg)](https://github.com/Margul7803/kymat/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+
 A smooth **144 FPS ASCII / terminal music screensaver** for **Wayland & Hyprland** ([Omarchy](https://omarchy.org/)), inspired by [Sonora](https://github.com/sonora)'s fullscreen player aesthetic.
 
 Kymat reacts in real time to whatever music is playing on your desktop — displaying pixel-art album covers, ambient colors extracted from the artwork, synchronized lyrics with depth-of-field blur, and a live audio soundwave.
@@ -31,14 +34,39 @@ Kymat reacts in real time to whatever music is playing on your desktop — displ
 
 ---
 
+## Dependencies
+
+### Build Dependencies
+- Rust toolchain (`cargo` / `rustc`, stable)
+- `libpulse` (PulseAudio/PipeWire client headers)
+- `dbus`
+- `pkg-config`
+
+### Runtime Dependencies
+- **Required**: `libpulse` (or `pipewire-pulse`), `dbus`, `fontconfig`
+- **Recommended**:
+  - `ttf-jetbrains-mono-nerd` (terminal font & UI icons)
+  - `noto-fonts-cjk` (Japanese/Korean/Chinese lyrics and titles)
+  - `jq`, `socat`, `hyprland` (for Omarchy dual-monitor screensaver scripts)
+
+---
+
 ## Installation
+
+### Arch Linux (AUR)
+
+```bash
+yay -S kymat
+# or
+paru -S kymat
+```
 
 ### From Source (Arch Linux / Omarchy)
 
 ```bash
 git clone https://github.com/Margul7803/kymat.git
 cd kymat
-cargo build --release
+cargo build --release --locked
 
 install -Dm755 target/release/kymat ~/.local/bin/kymat
 install -Dm644 foot-kymat.ini ~/.config/kymat/foot-kymat.ini
@@ -72,7 +100,15 @@ kymat
 
 ## Omarchy Dual-Monitor Screensaver Setup
 
-If you use **Omarchy** with a second monitor connected, you can display the classic Omarchy screensaver on your primary display and **Kymat** on your secondary display:
+If you use **Omarchy** with a second monitor connected, you can display the classic Omarchy screensaver on your primary display and **Kymat** on your secondary display.
+
+If installed from **AUR**, link the helper launcher into `~/.local/bin/` (which takes precedence over `/usr/share/omarchy/bin/` without conflicting with Omarchy's system files):
+
+```bash
+ln -sf /usr/share/kymat/scripts/omarchy-launch-screensaver ~/.local/bin/omarchy-launch-screensaver
+```
+
+If installed **from source**:
 
 ```bash
 install -Dm755 scripts/omarchy-launch-screensaver ~/.local/bin/omarchy-launch-screensaver
@@ -112,6 +148,28 @@ background_transition_secs = 1.5
 layout_transition_secs = 0.6
 ```
 
+---
+
+## Uninstall
+
+### AUR
+```bash
+yay -Rns kymat
+rm -f ~/.local/bin/omarchy-launch-screensaver
+rm -rf ~/.config/kymat
+```
+
+### Source Install
+```bash
+rm -f ~/.local/bin/kymat \
+      ~/.local/bin/kymat-screensaver-runner \
+      ~/.local/bin/omarchy-launch-screensaver \
+      ~/.local/share/applications/kymat.desktop
+rm -rf ~/.config/kymat
+```
+
+---
+
 ## License
 
-GPL-3.0-or-later
+[GPL-3.0-or-later](LICENSE)

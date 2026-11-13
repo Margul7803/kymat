@@ -1,4 +1,4 @@
-use rustfft::{Fft, FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::f32::consts::PI;
 use std::sync::Arc;
 
@@ -96,11 +96,7 @@ impl FftAnalyzer {
         }
     }
 
-    pub fn push_samples_telemetry(
-        &mut self,
-        samples: &[f32],
-        sensitivity: f32,
-    ) -> AudioTelemetry {
+    pub fn push_samples_telemetry(&mut self, samples: &[f32], sensitivity: f32) -> AudioTelemetry {
         for &s in samples {
             let clean = if s.is_finite() { s } else { 0.0 };
             self.ring_buf[self.write_pos] = clean;

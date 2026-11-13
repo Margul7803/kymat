@@ -1,6 +1,6 @@
 use crate::media::lyrics::SyncedLyrics;
-use crate::ui::background::{AmbientBackground, lerp_oklab, oklab_to_rgb, rgb_to_oklab};
-use crate::ui::cover_widget::{Rgb, fit_text_to_cols};
+use crate::ui::background::{lerp_oklab, oklab_to_rgb, rgb_to_oklab, AmbientBackground};
+use crate::ui::cover_widget::{fit_text_to_cols, Rgb};
 use crate::ui::glyph_fallback::GlyphFallbackCache;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -109,11 +109,16 @@ impl LyricsScrollState {
         let mut cursor_y = 0i32;
 
         for line in &lyrics.lines {
-            let wrapped = wrap_lyric_text_subpixel(&line.text, max_sub_w, &mut self.glyph_cache, sub_h);
+            let wrapped =
+                wrap_lyric_text_subpixel(&line.text, max_sub_w, &mut self.glyph_cache, sub_h);
             let mut sub_lines = Vec::with_capacity(wrapped.len());
             for sub_text in &wrapped {
-                let (sharp_grid, used_sub_w) =
-                    rasterize_line_subpixels_with_cache(sub_text, max_sub_w, sub_h, &mut self.glyph_cache);
+                let (sharp_grid, used_sub_w) = rasterize_line_subpixels_with_cache(
+                    sub_text,
+                    max_sub_w,
+                    sub_h,
+                    &mut self.glyph_cache,
+                );
                 let mut blurred_grid = sharp_grid.clone();
                 apply_gaussian_blur_in_place(
                     &mut blurred_grid,
@@ -274,10 +279,7 @@ pub fn wrap_lyric_text(text: &str, max_width: usize) -> Vec<String> {
     let mut pending_space = false;
 
     for (unit, trailing_space) in units {
-        let unit_w: usize = unit
-            .chars()
-            .map(|c| c.width().unwrap_or(1).max(1))
-            .sum();
+        let unit_w: usize = unit.chars().map(|c| c.width().unwrap_or(1).max(1)).sum();
 
         if cur_w == 0 {
             current.push_str(&unit);
@@ -492,9 +494,7 @@ fn glyph_bitmap_5x6(ch: char) -> Option<([u8; 6], usize)> {
         'P' => ([0b11110, 0b11011, 0b11110, 0b11000, 0b11000, 0], 5),
         'Q' => ([0b01110, 0b11011, 0b11011, 0b11111, 0b01111, 0b00011], 5),
         'R' | 'Ř' => ([0b11110, 0b11011, 0b11110, 0b11110, 0b11011, 0], 5),
-        'S' | 'Ś' | 'Š' | 'Ş' | 'Ș' => {
-            ([0b01111, 0b11000, 0b01110, 0b00011, 0b11110, 0], 5)
-        }
+        'S' | 'Ś' | 'Š' | 'Ş' | 'Ș' => ([0b01111, 0b11000, 0b01110, 0b00011, 0b11110, 0], 5),
         'T' | 'Ť' | 'Ţ' | 'Ț' => ([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0], 5),
         'U' | 'Ù' | 'Û' | 'Ü' | 'Ú' | 'Ů' => {
             ([0b11011, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5)
@@ -839,7 +839,11 @@ fn apply_gaussian_blur_in_place(
             for x in 0..w {
                 let up = if y > 0 { temp[(y - 1) * w + x] } else { 0.0 };
                 let mid = temp[y * w + x];
-                let down = if y + 1 < h { temp[(y + 1) * w + x] } else { 0.0 };
+                let down = if y + 1 < h {
+                    temp[(y + 1) * w + x]
+                } else {
+                    0.0
+                };
                 grid[y * w + x] = up * side_w + mid * center_w + down * side_w;
             }
         }
@@ -981,7 +985,11 @@ pub fn render_synced_lyrics(
             };
 
             let effective_fade = 1.0 - (1.0 - depth_fade) * opacity.clamp(0.0, 1.0);
-            let base_ok = if is_active { white_ok } else { inactive_base_ok };
+            let base_ok = if is_active {
+                white_ok
+            } else {
+                inactive_base_ok
+            };
 
             let grid_slice: &[f32] = if is_active {
                 &sub_line.sharp_grid
@@ -1037,7 +1045,10 @@ fn render_compact_fallback(
     scroll: &mut LyricsScrollState,
     params: &LyricsRenderParams<'_>,
 ) {
-    let active_idx = params.lyrics.active_line_index(params.position).unwrap_or(0);
+    let active_idx = params
+        .lyrics
+        .active_line_index(params.position)
+        .unwrap_or(0);
     let smooth_center = scroll.update(active_idx as f32, params.dt);
     let center_y = area.y + area.height / 2;
     let white_ok = rgb_to_oklab(255, 255, 255);
@@ -1093,7 +1104,10 @@ mod tests {
     fn test_wrap_lyric_text_handles_cjk_without_spaces_and_kinsoku() {
         let line = "夢ならばどれほどよかったでしょう。まだあなたのことを夢にみる";
         let wrapped = wrap_lyric_text(line, 20);
-        assert!(wrapped.len() >= 2, "Japanese line should wrap into multiple lines");
+        assert!(
+            wrapped.len() >= 2,
+            "Japanese line should wrap into multiple lines"
+        );
         for sub in &wrapped {
             assert!(
                 !sub.starts_with('。') && !sub.starts_with('、'),
@@ -1151,11 +1165,16 @@ mod tests {
         assert_eq!(scroll.cached_sub_h, CJK_SUB_H);
         assert_eq!(scroll.sub_line_rows, 5);
         assert!(!scroll.entries[0].sub_lines.is_empty());
-        let peak = scroll.entries[0].sub_lines[0]
-            .sharp_grid
-            .iter()
-            .copied()
-            .fold(0.0_f32, f32::max);
-        assert!(peak > 0.5, "CJK/Hangul line should rasterize visible pixels");
+        if crate::ui::glyph_fallback::ensure_cjk_test_font_or_skip() {
+            let peak = scroll.entries[0].sub_lines[0]
+                .sharp_grid
+                .iter()
+                .copied()
+                .fold(0.0_f32, f32::max);
+            assert!(
+                peak > 0.5,
+                "CJK/Hangul line should rasterize visible pixels"
+            );
+        }
     }
 }

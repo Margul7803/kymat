@@ -64,12 +64,9 @@ impl SyncedLyrics {
             pos >= active.start && pos <= active.end + Duration::from_millis(1800);
 
         // Check if the next line starts within 0.65s (anticipate chorus entrance on the drop)
-        let imminent_chorus = self
-            .lines
-            .get(idx + 1)
-            .is_some_and(|next| {
-                next.is_chorus && next.start.saturating_sub(pos) <= Duration::from_millis(650)
-            });
+        let imminent_chorus = self.lines.get(idx + 1).is_some_and(|next| {
+            next.is_chorus && next.start.saturating_sub(pos) <= Duration::from_millis(650)
+        });
 
         if self.has_detected_chorus {
             if (in_active_window && active.is_chorus) || imminent_chorus {
@@ -173,7 +170,9 @@ struct SonoraHit {
 
 #[derive(Deserialize)]
 enum SonoraLyricsKind {
-    Synced { lines: Vec<SonoraLine> },
+    Synced {
+        lines: Vec<SonoraLine>,
+    },
     #[serde(other)]
     Other,
 }
@@ -688,7 +687,8 @@ mod tests {
         assert!(synced.lines[1].is_chorus);
         assert!(synced.lines[3].is_chorus);
 
-        let (artist, title) = clean_youtube_metadata("YOASOBI - Topic", "YOASOBI - 夜に駆ける【Official MV】");
+        let (artist, title) =
+            clean_youtube_metadata("YOASOBI - Topic", "YOASOBI - 夜に駆ける【Official MV】");
         assert_eq!(artist, "YOASOBI");
         assert_eq!(title, "夜に駆ける");
 

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  KYMAT_REQUIRE_CJK_TESTS: "1"
+
+jobs:
+  check:
+    name: Format, Clippy, Tests & Release Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpulse-dev \
+            libdbus-1-dev \
+            pkg-config \
+            fontconfig \
+            fonts-noto-cjk \
+            shellcheck
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run unit tests (debug)
+        run: cargo test --locked
+
+      - name: Run unit & 144 FPS performance budget tests (release)
+        run: cargo test --release --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Smoke test binary CLI
+        run: |
+          ./target/release/kymat --version
+          ./target/release/kymat --help
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning scripts/kymat-screensaver-runner scripts/omarchy-launch-screensaver
+
+  security:
+    name: Cargo Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run rustsec/audit-check
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  arch-build:
+    name: Arch Linux Build & Test
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install Arch dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            rust \
+            libpulse \
+            dbus \
+            fontconfig \
+            noto-fonts-cjk \
+            pkgconf \
+            git
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and test with --frozen
+        run: |
+          cargo test --frozen
+          cargo build --release --frozen
+          ./target/release/kymat --version

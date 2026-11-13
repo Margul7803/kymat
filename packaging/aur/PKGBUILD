@@ -1,0 +1,59 @@
+# Maintainer: Mario ABOU JAMRA <83760967+Margul7803@users.noreply.github.com>
+
+pkgname=kymat
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Margul7803/kymat'
+license=('GPL-3.0-or-later')
+options=('!lto')
+depends=(
+  'libpulse'
+  'dbus'
+  'gcc-libs'
+  'glibc'
+  'fontconfig'
+)
+makedepends=('cargo')
+optdepends=(
+  'noto-fonts-cjk: CJK lyrics and track title rendering'
+  'ttf-jetbrains-mono-nerd: recommended Nerd Font glyphs and heart icon'
+  'hyprland: Omarchy dual-monitor screensaver integration'
+  'jq: Omarchy dual-monitor screensaver scripts'
+  'socat: Omarchy dual-monitor screensaver scripts'
+  'foot: default Wayland terminal integration'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --all-features
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/kymat "$pkgdir/usr/bin/kymat"
+  install -Dm755 scripts/kymat-screensaver-runner "$pkgdir/usr/bin/kymat-screensaver-runner"
+  install -Dm755 scripts/omarchy-launch-screensaver "$pkgdir/usr/share/kymat/scripts/omarchy-launch-screensaver"
+  install -Dm644 foot-kymat.ini "$pkgdir/usr/share/kymat/foot-kymat.ini"
+  install -Dm644 config.toml.example "$pkgdir/usr/share/kymat/config.toml.example"
+  install -Dm644 assets/kymat.desktop "$pkgdir/usr/share/applications/kymat.desktop"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

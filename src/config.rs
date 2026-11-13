@@ -1,9 +1,9 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 use std::fs;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +18,7 @@ pub enum DisplayMode {
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "kymat",
+    version,
     about = "High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)"
 )]
 pub struct CliArgs {
@@ -102,7 +103,12 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load(cli: &CliArgs) -> Self {
         let cfg_path = Self::config_path();
-        if let Some(ref path) = cfg_path {
+        let foot_path = Self::foot_config_path();
+        Self::load_with_paths(cli, cfg_path.as_deref(), foot_path.as_deref())
+    }
+
+    fn load_with_paths(cli: &CliArgs, cfg_path: Option<&Path>, foot_path: Option<&Path>) -> Self {
+        if let Some(path) = cfg_path {
             if !path.exists() {
                 if let Some(parent) = path.parent() {
                     let _ = fs::create_dir_all(parent);
@@ -137,7 +143,9 @@ impl AppConfig {
             cfg.auto_lyrics_split = true;
         }
 
-        cfg.sync_foot_config();
+        if let Some(path) = foot_path {
+            cfg.sync_foot_config_to(path);
+        }
         cfg
     }
 
@@ -150,20 +158,20 @@ impl AppConfig {
     }
 
     pub fn sync_foot_config(&self) {
+        if let Some(path) = Self::foot_config_path() {
+            self.sync_foot_config_to(&path);
+        }
+    }
+
+    fn sync_foot_config_to(&self, path: &Path) {
         let content = format!(
             "[main]\nfont=JetBrainsMono Nerd Font:size={},Noto Sans CJK JP:size={}\npad=0x0\n\n[colors-dark]\nbackground=050508\nforeground=ffffff\n",
             self.font_size, self.font_size
         );
-        if let Some(path) = Self::foot_config_path() {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            let _ = fs::write(path, &content);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
-        let local_foot = PathBuf::from("foot-kymat.ini");
-        if local_foot.exists() {
-            let _ = fs::write(local_foot, &content);
-        }
+        let _ = fs::write(path, &content);
     }
 
     pub fn default_toml_template() -> &'static str {
@@ -255,16 +263,17 @@ pub fn handle_config_command(args: &ConfigArgs) -> Result<()> {
                         .spawn();
                     Ok(())
                 } else if binary_exists("xdg-open") {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(&path)
-                        .spawn();
+                    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
                     Ok(())
                 } else {
                     let editor = get_terminal_editor();
                     let parts: Vec<&str> = editor.split_whitespace().collect();
                     let cmd = parts[0];
                     let cmd_args = &parts[1..];
-                    let _ = std::process::Command::new(cmd).args(cmd_args).arg(&path).status();
+                    let _ = std::process::Command::new(cmd)
+                        .args(cmd_args)
+                        .arg(&path)
+                        .status();
                     Ok(())
                 }
             }
@@ -303,22 +312,28 @@ mod tests {
 
     #[test]
     fn test_default_config_and_cli_override() {
+        let tmp_dir = std::env::temp_dir().join(format!("kymat-test-{}", std::process::id()));
+        let cfg_path = tmp_dir.join("config.toml");
+        let foot_path = tmp_dir.join("foot-kymat.ini");
         let cli = CliArgs {
             command: None,
             screensaver: true,
             fps: Some(120),
-            font_size: Some(12),
+            font_size: Some(14),
             mode: Some(DisplayMode::Soundwave),
             debug_fps: false,
         };
-        let cfg = AppConfig::load(&cli);
+        let cfg = AppConfig::load_with_paths(&cli, Some(&cfg_path), Some(&foot_path));
         assert_eq!(cfg.fps, 120);
-        assert_eq!(cfg.font_size, 12);
+        assert_eq!(cfg.font_size, 14);
         assert_eq!(cfg.default_mode, DisplayMode::Soundwave);
         assert!(!cfg.auto_lyrics_split);
         assert!(!AppConfig::default().rat_easter_egg);
         assert!((cfg.attack_lambda - 35.0).abs() < f32::EPSILON);
         assert!((cfg.decay_lambda - 12.0).abs() < f32::EPSILON);
+        assert!(cfg_path.exists());
+        assert!(foot_path.exists());
+        let _ = fs::remove_dir_all(&tmp_dir);
     }
 
     #[test]

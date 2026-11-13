@@ -2,9 +2,11 @@
 name = "kymat"
 version = "0.1.0"
 edition = "2021"
+authors = ["Mario ABOU JAMRA <83760967+Margul7803@users.noreply.github.com>"]
 description = "High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Margul7803/kymat"
+homepage = "https://github.com/Margul7803/kymat"
 readme = "README.md"
 keywords = ["screensaver", "tui", "wayland", "hyprland", "mpris"]
 categories = ["command-line-utilities", "multimedia::audio", "visualization"]

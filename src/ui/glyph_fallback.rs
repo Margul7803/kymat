@@ -269,11 +269,31 @@ fn query_fc_list(pattern: &str) -> Option<Vec<(PathBuf, u32)>> {
 }
 
 #[cfg(test)]
+pub(crate) fn ensure_cjk_test_font_or_skip() -> bool {
+    let mut cache = GlyphFallbackCache::default();
+    let has_cjk =
+        cache.get_or_rasterize('あ', 10).is_some() && cache.get_or_rasterize('사', 10).is_some();
+    if !has_cjk {
+        let required = std::env::var_os("CI").is_some()
+            || std::env::var_os("KYMAT_REQUIRE_CJK_TESTS").is_some();
+        assert!(
+            !required,
+            "CJK/Hangul system fonts are required in CI/strict mode (install noto-fonts-cjk / fonts-noto-cjk)"
+        );
+        eprintln!("Skipping CJK rasterization assertion: no system CJK font installed");
+    }
+    has_cjk
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_cjk_fallback_rasterization() {
+        if !ensure_cjk_test_font_or_skip() {
+            return;
+        }
         let mut cache = GlyphFallbackCache::default();
         for ch in ['夜', 'に', '駆', '愛', '夢', '사', '你'] {
             let glyph = cache

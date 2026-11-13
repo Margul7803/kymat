@@ -1,7 +1,7 @@
 use crate::audio::fft::AudioTelemetry;
 use crate::media::lyrics::SyncedLyrics;
 use crate::ui::background::AmbientBackground;
-use crate::ui::cover_widget::{Rgb, best_quadrant_cell};
+use crate::ui::cover_widget::{best_quadrant_cell, Rgb};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -205,12 +205,10 @@ impl RatEasterEgg {
                 // rises slowly (2.4s) so the subsequent drop impact produces a high `short_bass / pre_drop_bass_min`.
                 if self.short_bass < self.pre_drop_bass_min {
                     let a_fall = 1.0 - (-dt / 0.25).exp();
-                    self.pre_drop_bass_min +=
-                        (self.short_bass - self.pre_drop_bass_min) * a_fall;
+                    self.pre_drop_bass_min += (self.short_bass - self.pre_drop_bass_min) * a_fall;
                 } else {
                     let a_rise = 1.0 - (-dt / 2.4).exp();
-                    self.pre_drop_bass_min +=
-                        (self.short_bass - self.pre_drop_bass_min) * a_rise;
+                    self.pre_drop_bass_min += (self.short_bass - self.pre_drop_bass_min) * a_rise;
                 }
 
                 let a_flux = 1.0 - (-dt / 0.35).exp();
@@ -247,20 +245,18 @@ impl RatEasterEgg {
 
             // MPRIS intro/outro guards when track duration is known (> 30s)
             let known_long_track = ctx.track_duration >= Duration::from_secs(30);
-            let in_early_intro =
-                known_long_track && ctx.track_pos < Duration::from_millis(6500);
+            let in_early_intro = known_long_track && ctx.track_pos < Duration::from_millis(6500);
             let in_late_outro = known_long_track
                 && ctx.track_duration.saturating_sub(ctx.track_pos) < Duration::from_secs(6);
 
             // If LRC has confirmed repeated choruses and we are currently in a non-chorus verse,
             // require a stronger purely-instrumental drop surge to trigger.
-            let trigger_threshold = if ctx.lyrics.is_some_and(|l| l.has_detected_chorus)
-                && lrc_affinity < 0.1
-            {
-                0.96
-            } else {
-                0.76
-            };
+            let trigger_threshold =
+                if ctx.lyrics.is_some_and(|l| l.has_detected_chorus) && lrc_affinity < 0.1 {
+                    0.96
+                } else {
+                    0.76
+                };
 
             // --- 3. 4-Phase Musical State Machine ---
             match self.phase {
@@ -300,9 +296,8 @@ impl RatEasterEgg {
                         self.phase_timer = (self.phase_timer - dt).max(0.0);
 
                         // Hysteresis: detect sudden breakdown/calm bridge to exit immediately on the break
-                        let in_sudden_break = rms_ratio < 0.74
-                            || bass_ratio < 0.64
-                            || self.fullness_smooth < 0.24;
+                        let in_sudden_break =
+                            rms_ratio < 0.74 || bass_ratio < 0.64 || self.fullness_smooth < 0.24;
                         if in_sudden_break {
                             self.breakdown_confirm_secs += dt;
                         } else {
@@ -351,7 +346,8 @@ impl RatEasterEgg {
         let target_opacity = if should_show { 1.0 } else { 0.0 };
         let fade_speed = if should_show { 7.5 } else { 4.5 };
         let fade_factor = 1.0 - (-fade_speed * dt).exp();
-        self.opacity = (self.opacity + (target_opacity - self.opacity) * fade_factor).clamp(0.0, 1.0);
+        self.opacity =
+            (self.opacity + (target_opacity - self.opacity) * fade_factor).clamp(0.0, 1.0);
 
         if self.opacity > 0.005 {
             let beat_boost = if is_active_audio {
@@ -366,13 +362,7 @@ impl RatEasterEgg {
 
     /// Renders the dancing rat in the center of `area` using 2x2 sub-pixel Unicode Quadrants
     /// and 144 FPS temporal frame interpolation, alpha-blended over the existing terminal buffer.
-    pub fn render(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        bg: &AmbientBackground,
-        cell_aspect: f32,
-    ) {
+    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: &AmbientBackground, cell_aspect: f32) {
         if self.opacity <= 0.01 || area.width < 16 || area.height < 12 {
             return;
         }
@@ -390,7 +380,9 @@ impl RatEasterEgg {
         let slice_a = &frames[frame_a * frame_pixels..(frame_a + 1) * frame_pixels];
         let slice_b = &frames[frame_b * frame_pixels..(frame_b + 1) * frame_pixels];
 
-        let rat_h = ((area.height as u32 * 64) / 100).clamp(14, 44).min(area.height as u32) as u16;
+        let rat_h = ((area.height as u32 * 64) / 100)
+            .clamp(14, 44)
+            .min(area.height as u32) as u16;
         let aspect_sprite = (SPRITE_W as f32) / (SPRITE_H as f32);
         let rat_w = ((rat_h as f32) * aspect_sprite * cell_aspect.clamp(1.8, 2.6))
             .round()

@@ -3,6 +3,15 @@
 # Target refresh rate in frames per second (15..=360)
 fps = 144
 
+# Terminal font size in pt when launching via Omarchy screensaver scripts (6..=48)
+font_size = 12
+
+# Default view mode: "lyrics" or "soundwave"
+default_mode = "lyrics"
+
+# Automatically show the dancing rat easter egg during musical climaxes (can always be toggled with 'r')
+rat_easter_egg = false
+
 # PipeWire/PulseAudio spectrum sensitivity multiplier
 audio_sensitivity = 1.15
 
@@ -15,8 +24,5 @@ decay_lambda = 12.0
 # Ambient background Oklab transition duration on track change (seconds)
 background_transition_secs = 1.5
 
-# Layout transition duration between Waveform and Lyrics views (seconds)
+# Layout transition duration between Soundwave and Lyrics views (seconds)
 layout_transition_secs = 0.6
-
-# Automatically switch to the split-screen synced lyrics view when lyrics are available
-auto_lyrics_split = true

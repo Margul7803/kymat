@@ -1,0 +1,38 @@
+name: Bug Report
+description: Report a crash, rendering glitch, audio issue, or integration bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what happened vs. what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `kymat ...`
+        2. Play a track on ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kymat version
+      description: Output of `kymat --version` or commit hash.
+      placeholder: "kymat 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/Distro, Wayland compositor, terminal emulator, and media player.
+      placeholder: "Arch Linux / Omarchy, Hyprland, foot, Spotify"
+    validations:
+      required: true

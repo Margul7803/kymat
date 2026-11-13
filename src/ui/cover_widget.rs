@@ -1,5 +1,5 @@
 use crate::media::cover::CoverArtData;
-use crate::ui::background::{AmbientBackground, oklab_to_rgb};
+use crate::ui::background::{oklab_to_rgb, AmbientBackground};
 use image::imageops::FilterType;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -280,8 +280,8 @@ pub fn render_cover_and_meta(
     } else {
         36
     };
-    let start_y = area.y
-        + ((area.height.saturating_sub(total_block_h) as u32 * vertical_bias) / 100) as u16;
+    let start_y =
+        area.y + ((area.height.saturating_sub(total_block_h) as u32 * vertical_bias) / 100) as u16;
     let cover_x = area.x + area.width.saturating_sub(cover_w) / 2;
 
     let pw = (cover_w * 2) as f32;
@@ -595,12 +595,7 @@ mod tests {
 
     #[test]
     fn test_best_quadrant_cell_vertical_split() {
-        let left_red_right_blue = [
-            (240, 20, 20),
-            (20, 20, 240),
-            (240, 20, 20),
-            (20, 20, 240),
-        ];
+        let left_red_right_blue = [(240, 20, 20), (20, 20, 240), (240, 20, 20), (20, 20, 240)];
         let (ch, fg, bg) = best_quadrant_cell(left_red_right_blue);
         assert_eq!(ch, '▌');
         assert_eq!(fg, (240, 20, 20));
@@ -650,6 +645,9 @@ mod tests {
         let heart_found = (0..area.height).any(|y| {
             (0..area.width).any(|x| buf.cell((x, y)).is_some_and(|c| c.symbol() == "\u{f004}"))
         });
-        assert!(heart_found, "Heart icon should render cleanly next to wide CJK title");
+        assert!(
+            heart_found,
+            "Heart icon should render cleanly next to wide CJK title"
+        );
     }
 }

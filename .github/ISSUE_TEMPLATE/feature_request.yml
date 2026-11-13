@@ -1,0 +1,19 @@
+name: Feature Request
+description: Suggest a new visual mode, player integration, or configuration option
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem does this feature solve?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed behavior
+      description: How would you like it to work?
+    validations:
+      required: true

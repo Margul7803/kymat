@@ -1,0 +1,25 @@
+pkgbase = kymat
+	pkgdesc = High-frequency (144 FPS) TUI/ASCII musical screensaver for Wayland/Hyprland (Omarchy x Sonora)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Margul7803/kymat
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = cargo
+	depends = libpulse
+	depends = dbus
+	depends = gcc-libs
+	depends = glibc
+	depends = fontconfig
+	optdepends = noto-fonts-cjk: CJK lyrics and track title rendering
+	optdepends = ttf-jetbrains-mono-nerd: recommended Nerd Font glyphs and heart icon
+	optdepends = hyprland: Omarchy dual-monitor screensaver integration
+	optdepends = jq: Omarchy dual-monitor screensaver scripts
+	optdepends = socat: Omarchy dual-monitor screensaver scripts
+	optdepends = foot: default Wayland terminal integration
+	options = !lto
+	source = kymat-0.1.0.tar.gz::https://github.com/Margul7803/kymat/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = kymat

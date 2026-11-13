@@ -1,16 +1,16 @@
 use crate::audio::fft::AudioTelemetry;
 use crate::audio::smoother::SpectrumSmoother;
 use crate::config::AppConfig;
-use crate::media::cover::{CoverArtData, spawn_cover_worker};
-use crate::media::lyrics::{SyncedLyrics, spawn_lyrics_worker};
-use crate::media::mpris_watcher::{MprisState, PlaybackStatus, TrackMetadata, spawn_mpris_watcher};
-use crate::ui::background::{AmbientBackground, ThemePalette, oklab_to_rgb};
+use crate::media::cover::{spawn_cover_worker, CoverArtData};
+use crate::media::lyrics::{spawn_lyrics_worker, SyncedLyrics};
+use crate::media::mpris_watcher::{spawn_mpris_watcher, MprisState, PlaybackStatus, TrackMetadata};
+use crate::ui::background::{oklab_to_rgb, AmbientBackground, ThemePalette};
 use crate::ui::cover_widget::{
-    CoverMetaView, ScaledCoverCache, draw_centered_text, render_cover_and_meta,
-    render_passive_time_bar,
+    draw_centered_text, render_cover_and_meta, render_passive_time_bar, CoverMetaView,
+    ScaledCoverCache,
 };
 use crate::ui::glyph_fallback::warm_up_in_background;
-use crate::ui::lyrics_widget::{LyricsRenderParams, LyricsScrollState, render_synced_lyrics};
+use crate::ui::lyrics_widget::{render_synced_lyrics, LyricsRenderParams, LyricsScrollState};
 use crate::ui::rat_widget::{ClimaxContext, RatEasterEgg};
 use crate::ui::transitions::LayoutTransition;
 use crate::ui::wave_widget::render_braille_wave;
@@ -100,8 +100,7 @@ impl App {
     pub fn tick(&mut self, dt: f32, now: Instant, term_width: u16, term_height: u16) {
         self.frame_times[self.frame_idx] = dt.max(0.0001);
         self.frame_idx = (self.frame_idx + 1) % self.frame_times.len();
-        let avg_dt: f32 =
-            self.frame_times.iter().sum::<f32>() / (self.frame_times.len() as f32);
+        let avg_dt: f32 = self.frame_times.iter().sum::<f32>() / (self.frame_times.len() as f32);
         self.measured_fps = 1.0 / avg_dt;
 
         if self.mpris_rx.has_changed().unwrap_or(false) {
@@ -306,8 +305,7 @@ impl App {
             let cell_aspect = self
                 .cover_cache
                 .cell_aspect_for_window(area.width, area.height);
-            self.rat_easter_egg
-                .render(area, buf, &self.bg, cell_aspect);
+            self.rat_easter_egg.render(area, buf, &self.bg, cell_aspect);
         }
 
         if self.debug_fps {
@@ -392,11 +390,17 @@ mod tests {
         }
         let total_144_frames = bench_start.elapsed();
         let avg_frame_micros = total_144_frames.as_micros() / 144;
+        let max_avg_micros = if cfg!(debug_assertions) {
+            15_000
+        } else {
+            2_500
+        };
 
         assert!(
-            avg_frame_micros < 2500,
-            "Frame render too slow: {} µs avg",
-            avg_frame_micros
+            avg_frame_micros < max_avg_micros,
+            "Frame render too slow: {} µs avg (budget: {} µs)",
+            avg_frame_micros,
+            max_avg_micros
         );
     }
 
@@ -432,10 +436,16 @@ mod tests {
             app.render(area, &mut buf, 1.0 / 144.0, now);
         }
         let avg_frame_micros = bench_start.elapsed().as_micros() / 144;
+        let max_avg_micros = if cfg!(debug_assertions) {
+            15_000
+        } else {
+            2_500
+        };
         assert!(
-            avg_frame_micros < 2500,
-            "Multilingual frame render too slow: {} µs avg",
-            avg_frame_micros
+            avg_frame_micros < max_avg_micros,
+            "Multilingual frame render too slow: {} µs avg (budget: {} µs)",
+            avg_frame_micros,
+            max_avg_micros
         );
     }
 }

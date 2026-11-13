@@ -15,12 +15,12 @@ use crossterm::event::{
     MouseEventKind,
 };
 use crossterm::terminal::{
-    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-    disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+    EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
@@ -115,9 +115,7 @@ async fn run_event_loop(
                     }
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('c')
-                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(());
                         }
                         _ => {}

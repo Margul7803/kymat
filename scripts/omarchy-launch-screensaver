@@ -53,9 +53,17 @@ primary_monitor=$(hyprctl monitors -j | jq -r '
   end
 ')
 
-KYMAT_CFG="$HOME/.config/kymat/config.toml"
-KYMAT_FOOT_CFG="$HOME/.config/kymat/foot-kymat.ini"
-KYMAT_RUNNER="$HOME/.local/bin/kymat-screensaver-runner"
+KYMAT_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kymat"
+KYMAT_CFG="$KYMAT_CFG_DIR/config.toml"
+KYMAT_FOOT_CFG="$KYMAT_CFG_DIR/foot-kymat.ini"
+if [[ ! -f "$KYMAT_FOOT_CFG" ]]; then
+  if [[ -f /usr/share/kymat/foot-kymat.ini ]]; then
+    KYMAT_FOOT_CFG="/usr/share/kymat/foot-kymat.ini"
+  else
+    KYMAT_FOOT_CFG="$OMARCHY_PATH/default/foot/screensaver.ini"
+  fi
+fi
+KYMAT_RUNNER=$(command -v kymat-screensaver-runner || echo "$HOME/.local/bin/kymat-screensaver-runner")
 KYMAT_FONT_SIZE=$(awk -F'=' '/^[[:space:]]*font_size[[:space:]]*=/ { gsub(/[^0-9]/, "", $2); if ($2 != "") print $2; exit }' "$KYMAT_CFG" 2>/dev/null)
 KYMAT_FONT_SIZE=${KYMAT_FONT_SIZE:-12}
 

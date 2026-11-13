@@ -44,7 +44,13 @@ wait_for_terminal_resize
 ) &
 WATCHER_PID=$!
 
+KYMAT_BIN=$(command -v kymat || echo "$HOME/.local/bin/kymat")
+if [[ ! -x "$KYMAT_BIN" ]]; then
+  echo "kymat-screensaver-runner: 'kymat' binary not found in PATH or $HOME/.local/bin/kymat" >&2
+  exit 1
+fi
+
 # Run kymat in foreground so it owns the TTY for raw mode and keyboard/mouse wake events
-"$HOME/.local/bin/kymat" --screensaver
+"$KYMAT_BIN" --screensaver
 
 exit_screensaver
