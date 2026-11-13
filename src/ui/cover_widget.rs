@@ -5,6 +5,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::time::Duration;
+use unicode_normalization::UnicodeNormalization;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub type Rgb = (u8, u8, u8);
 
@@ -397,6 +399,34 @@ pub fn render_cover_and_meta(
     }
 }
 
+/// Normalizes `text` to NFC and truncates it to fit within `max_cols` terminal columns,
+/// appending `'…'` if truncated. Returns `(display_string, display_cols)`.
+pub(crate) fn fit_text_to_cols(text: &str, max_cols: usize) -> (String, usize) {
+    if max_cols == 0 {
+        return (String::new(), 0);
+    }
+
+    let normalized: String = text.nfc().collect();
+    let total_cols = normalized.width();
+    if total_cols <= max_cols {
+        return (normalized, total_cols);
+    }
+
+    let budget = max_cols.saturating_sub(1);
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in normalized.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    (out, used + 1)
+}
+
 fn render_title_with_heart(
     buf: &mut Buffer,
     area_x: u16,
@@ -415,16 +445,10 @@ fn render_title_with_heart(
     };
 
     let has_heart = !title.is_empty();
-    let max_title_chars = (area_w.saturating_sub(6)) as usize;
-    let total_chars = display_title.chars().count();
-    let is_truncated = total_chars > max_title_chars;
-    let shown_chars = if is_truncated {
-        max_title_chars
-    } else {
-        total_chars
-    };
+    let max_title_cols = (area_w.saturating_sub(6)) as usize;
+    let (shown_text, shown_cols) = fit_text_to_cols(display_title, max_title_cols);
 
-    let title_len = shown_chars as u16;
+    let title_len = shown_cols as u16;
     let total_len = if has_heart { title_len + 2 } else { title_len };
     let start_x = area_x + area_w.saturating_sub(total_len) / 2;
 
@@ -432,26 +456,7 @@ fn render_title_with_heart(
         .fg(Color::Rgb(255, 255, 255))
         .add_modifier(Modifier::BOLD);
 
-    let limit = if is_truncated {
-        shown_chars.saturating_sub(1)
-    } else {
-        shown_chars
-    };
-
-    for (i, ch) in display_title.chars().take(limit).enumerate() {
-        let x = start_x + i as u16;
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_style(title_style);
-        }
-    }
-    if is_truncated && shown_chars > 0 {
-        let x = start_x + (shown_chars - 1) as u16;
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char('…');
-            cell.set_style(title_style);
-        }
-    }
+    buf.set_stringn(start_x, y, &shown_text, max_title_cols, title_style);
 
     if has_heart {
         let heart_x = start_x + title_len + 1;
@@ -557,38 +562,10 @@ pub fn draw_centered_text(
     if y >= buf.area().bottom() || area_w < 4 {
         return;
     }
-    let max_chars = (area_w.saturating_sub(2)) as usize;
-    let total_chars = text.chars().count();
-    let is_truncated = total_chars > max_chars;
-    let shown_chars = if is_truncated { max_chars } else { total_chars };
-
-    let char_count = shown_chars as u16;
-    let start_x = area_x + area_w.saturating_sub(char_count) / 2;
-
-    let limit = if is_truncated {
-        shown_chars.saturating_sub(1)
-    } else {
-        shown_chars
-    };
-
-    for (i, ch) in text.chars().take(limit).enumerate() {
-        let x = start_x + i as u16;
-        if x < area_x + area_w {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(ch);
-                cell.set_style(style);
-            }
-        }
-    }
-    if is_truncated && shown_chars > 0 {
-        let x = start_x + (shown_chars - 1) as u16;
-        if x < area_x + area_w {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char('…');
-                cell.set_style(style);
-            }
-        }
-    }
+    let max_cols = (area_w.saturating_sub(2)) as usize;
+    let (shown_text, shown_cols) = fit_text_to_cols(text, max_cols);
+    let start_x = area_x + area_w.saturating_sub(shown_cols as u16) / 2;
+    buf.set_stringn(start_x, y, &shown_text, max_cols, style);
 }
 
 #[inline]
@@ -649,5 +626,30 @@ mod tests {
 
         // Verify that the cached cell aspect produces a true square (~2.25 cols per row)
         assert!((cache.cached_cell_aspect - 2.25).abs() < 0.35);
+    }
+
+    #[test]
+    fn test_fit_text_to_cols_and_wide_cjk_title_with_heart() {
+        let (fitted, cols) = fit_text_to_cols("e\u{0301}夜に駆ける", 12);
+        assert!(fitted.starts_with('é'));
+        assert!(cols <= 12);
+
+        let area = Rect::new(0, 0, 26, 20);
+        let mut buf = Buffer::empty(area);
+        let bg = AmbientBackground::new(1.2);
+        let mut cache = ScaledCoverCache::default();
+        let meta = CoverMetaView {
+            title: "夜に駆ける (YOASOBI)",
+            artist: "Кино",
+            position: Duration::from_secs(10),
+            duration: Duration::from_secs(180),
+            show_time_bar_under_artist: false,
+        };
+        render_cover_and_meta(area, &mut buf, &bg, None, &mut cache, &meta, 2.25);
+
+        let heart_found = (0..area.height).any(|y| {
+            (0..area.width).any(|x| buf.cell((x, y)).is_some_and(|c| c.symbol() == "\u{f004}"))
+        });
+        assert!(heart_found, "Heart icon should render cleanly next to wide CJK title");
     }
 }

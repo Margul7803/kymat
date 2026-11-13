@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::watch;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LyricWord {
@@ -113,8 +114,8 @@ fn annotate_chorus_sections(lines: &mut [LyricLine]) -> bool {
     let mut repeated_keys: HashMap<&str, bool> = HashMap::new();
 
     for (i, key) in keys.iter().enumerate() {
-        // Ignore trivial vocalizations or empty markers (< 6 chars)
-        if key.len() < 6 {
+        // Ignore trivial vocalizations or empty markers (< 4 characters)
+        if key.chars().count() < 4 {
             continue;
         }
         let t = lines[i].start;
@@ -240,14 +241,14 @@ pub fn parse_sonora_lyrics_json(raw_json: &str) -> Option<SyncedLyrics> {
         let mut word_count = 0usize;
 
         for l in lines {
-            let text = l.text.trim().to_string();
+            let text: String = l.text.trim().nfc().collect();
             let words: Vec<LyricWord> = l
                 .words
                 .into_iter()
                 .map(|w| LyricWord {
                     start: w.start.into_std(),
                     end: w.end.into_std(),
-                    text: w.text,
+                    text: w.text.nfc().collect(),
                 })
                 .collect();
             word_count += words.len();
@@ -315,7 +316,7 @@ pub fn parse_lrc(lrc_text: &str, source_label: &str) -> Option<SyncedLyrics> {
             continue;
         };
         let tag = &trimmed[1..close_bracket];
-        let text = trimmed[close_bracket + 1..].trim().to_string();
+        let text: String = trimmed[close_bracket + 1..].trim().nfc().collect();
 
         let Some(start) = parse_lrc_timestamp(tag) else {
             continue;
@@ -385,6 +386,14 @@ fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
         "(Official Video)",
         "(Official Music Video)",
         "(Official Audio)",
+        "(Official MV)",
+        "【Official MV】",
+        "【MV】",
+        "(MV)",
+        "[MV]",
+        "（Official Video）",
+        "Official Music Video",
+        "(Full Ver.)",
         "(Lyrics)",
         "(Lyric Video)",
         "(Clip Officiel)",
@@ -394,12 +403,73 @@ fn clean_youtube_metadata(artist: &str, title: &str) -> (String, String) {
         "(HD)",
         "(4K)",
     ] {
-        if let Some(pos) = cleaned_title.to_lowercase().find(&noise.to_lowercase()) {
-            cleaned_title.replace_range(pos..pos + noise.len(), "");
-        }
+        strip_case_insensitive_tag(&mut cleaned_title, noise);
     }
 
     (clean_artist, cleaned_title.trim().to_string())
+}
+
+/// Removes `tag` case-insensitively without panicking if Unicode lowercasing shifts byte indices.
+fn strip_case_insensitive_tag(text: &mut String, tag: &str) {
+    let tag_lower = tag.to_lowercase();
+    let tag_chars: Vec<char> = tag_lower.chars().collect();
+    if tag_chars.is_empty() {
+        return;
+    }
+
+    loop {
+        let char_indices: Vec<(usize, char)> = text.char_indices().collect();
+        let mut found_byte_range: Option<(usize, usize)> = None;
+
+        for start_ci in 0..char_indices.len() {
+            let mut ti = 0usize;
+            let mut ci = start_ci;
+            let mut matched = true;
+
+            while ti < tag_chars.len() {
+                if ci >= char_indices.len() {
+                    matched = false;
+                    break;
+                }
+                let ch = char_indices[ci].1;
+                let mut lc_iter = ch.to_lowercase();
+                if lc_iter.next() != Some(tag_chars[ti]) {
+                    matched = false;
+                    break;
+                }
+                // Handle rare multi-char lowercase expansions safely
+                for extra in lc_iter {
+                    ti += 1;
+                    if ti >= tag_chars.len() || extra != tag_chars[ti] {
+                        matched = false;
+                        break;
+                    }
+                }
+                if !matched {
+                    break;
+                }
+                ti += 1;
+                ci += 1;
+            }
+
+            if matched {
+                let start_b = char_indices[start_ci].0;
+                let end_b = if ci < char_indices.len() {
+                    char_indices[ci].0
+                } else {
+                    text.len()
+                };
+                found_byte_range = Some((start_b, end_b));
+                break;
+            }
+        }
+
+        if let Some((start_b, end_b)) = found_byte_range {
+            text.replace_range(start_b..end_b, "");
+        } else {
+            break;
+        }
+    }
 }
 
 async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<SyncedLyrics> {
@@ -480,16 +550,32 @@ async fn fetch_lrclib(client: &reqwest::Client, meta: &TrackMetadata) -> Option<
 }
 
 fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
+    let mut out = String::new();
+    let mut char_count = 0usize;
+    for ch in s.nfc() {
+        if char_count >= 48 {
+            break;
+        }
+        if ch.is_alphanumeric() {
+            for lc in ch.to_lowercase() {
+                if char_count >= 48 {
+                    break;
+                }
+                out.push(lc);
+                char_count += 1;
             }
-        })
-        .take(48)
-        .collect()
+        } else {
+            out.push('_');
+            char_count += 1;
+        }
+    }
+    if out.chars().all(|c| c == '_') {
+        let hash = s.bytes().fold(0x811c9dc5u32, |acc, b| {
+            acc.wrapping_mul(0x01000193) ^ (b as u32)
+        });
+        return format!("track_{hash:08x}");
+    }
+    out
 }
 
 /// Asynchronous lyrics worker (1. Sonora SQLite -> 2. LRCLIB)
@@ -592,6 +678,22 @@ mod tests {
         assert_eq!(synced.active_line_index(Duration::from_secs(3)), Some(0));
         assert_eq!(synced.active_line_index(Duration::from_secs(6)), Some(1));
         assert_eq!(synced.active_line_index(Duration::from_secs(15)), Some(2));
+    }
+
+    #[test]
+    fn test_unicode_nfc_cleanup_chorus_and_filename_sanitize() {
+        let lrc = "[00:01.00] e\u{0301}か\u{3099}\n[00:10.00] 夜に駆ける\n[00:25.00] 別の歌詞行\n[00:35.00] 夜に駆ける";
+        let synced = parse_lrc(lrc, "Test").expect("Should parse Unicode LRC");
+        assert_eq!(synced.lines[0].text, "éが");
+        assert!(synced.lines[1].is_chorus);
+        assert!(synced.lines[3].is_chorus);
+
+        let (artist, title) = clean_youtube_metadata("YOASOBI - Topic", "YOASOBI - 夜に駆ける【Official MV】");
+        assert_eq!(artist, "YOASOBI");
+        assert_eq!(title, "夜に駆ける");
+
+        assert_eq!(sanitize_filename("Кино"), "кино");
+        assert!(sanitize_filename("♪♫★").starts_with("track_"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::ui::cover_widget::{
     CoverMetaView, ScaledCoverCache, draw_centered_text, render_cover_and_meta,
     render_passive_time_bar,
 };
+use crate::ui::glyph_fallback::warm_up_in_background;
 use crate::ui::lyrics_widget::{LyricsRenderParams, LyricsScrollState, render_synced_lyrics};
 use crate::ui::rat_widget::{ClimaxContext, RatEasterEgg};
 use crate::ui::transitions::LayoutTransition;
@@ -61,6 +62,7 @@ impl App {
 
         let cover_rx = spawn_cover_worker(art_url_rx);
         let lyrics_rx = spawn_lyrics_worker(meta_rx);
+        warm_up_in_background();
 
         let bg = AmbientBackground::new(config.background_transition_secs);
         let smoother = SpectrumSmoother::new(config.attack_lambda, config.decay_lambda);
@@ -377,11 +379,14 @@ mod tests {
 
         let t0 = Instant::now();
         app.tick(1.0 / 144.0, t0, width, height);
-        app.render(area, &mut buf, 1.0 / 144.0, t0);
+        // Advance past layout transition so `split_t == 1.0` and initial glyph layout is cached
+        let t_settled = t0 + std::time::Duration::from_secs(1);
+        app.tick(1.0 / 144.0, t_settled, width, height);
+        app.render(area, &mut buf, 1.0 / 144.0, t_settled);
 
         let bench_start = Instant::now();
         for frame_i in 1..=144 {
-            let now = t0 + std::time::Duration::from_micros(6944 * frame_i);
+            let now = t_settled + std::time::Duration::from_micros(6944 * frame_i);
             app.tick(1.0 / 144.0, now, width, height);
             app.render(area, &mut buf, 1.0 / 144.0, now);
         }
@@ -391,6 +396,45 @@ mod tests {
         assert!(
             avg_frame_micros < 2500,
             "Frame render too slow: {} µs avg",
+            avg_frame_micros
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multilingual_frame_render_budget_at_144fps() {
+        let cfg = AppConfig::default();
+        let (_tx, audio_rx) = watch::channel(AudioTelemetry::default());
+        let mut app = App::new(cfg, false, audio_rx);
+
+        app.current_mpris.metadata.title = "夜に駆ける / Звезда по имени Солнце".to_string();
+        app.current_mpris.metadata.artist = "YOASOBI & Кино".to_string();
+        app.current_lyrics = parse_lrc(
+            "[00:01.00] Привет, мир! Ёлка и жизнь\n[00:05.00] 夜に駆ける 愛夢桜 사랑해\n[00:10.00] Año ñoño Straße Μουσική",
+            "Test",
+        );
+
+        let width = 160u16;
+        let height = 45u16;
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+
+        let t0 = Instant::now();
+        app.tick(1.0 / 144.0, t0, width, height);
+        // Advance past layout transition so `split_t == 1.0` and initial glyph layout is cached
+        let t_settled = t0 + std::time::Duration::from_secs(1);
+        app.tick(1.0 / 144.0, t_settled, width, height);
+        app.render(area, &mut buf, 1.0 / 144.0, t_settled);
+
+        let bench_start = Instant::now();
+        for frame_i in 1..=144 {
+            let now = t_settled + std::time::Duration::from_micros(6944 * frame_i);
+            app.tick(1.0 / 144.0, now, width, height);
+            app.render(area, &mut buf, 1.0 / 144.0, now);
+        }
+        let avg_frame_micros = bench_start.elapsed().as_micros() / 144;
+        assert!(
+            avg_frame_micros < 2500,
+            "Multilingual frame render too slow: {} µs avg",
             avg_frame_micros
         );
     }

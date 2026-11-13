@@ -19,7 +19,7 @@ Kymat reacts in real time to whatever music is playing on your desktop — displ
 ## Highlights
 
 - **Two Visual Modes (`Tab`)**
-  - **Lyrics View**: Split-screen layout with large pixel-art lyrics and smooth Gaussian blur on past and upcoming lines.
+  - **Lyrics View**: Split-screen layout with large pixel-art lyrics (Latin, Extended Latin, Cyrillic, Greek, plus Japanese/Korean/Chinese via system CJK font fallback) and smooth Gaussian blur on past and upcoming lines.
   - **Soundwave View**: Centered album artwork over a live, double-crest audio wave that reacts to your system audio.
 - **Works with Any Music Player**
   - Automatically detects **Sonora**, **Spotify**, **Deezer**, **YouTube Music**, **YouTube** (Brave, Chromium, Firefox), **VLC**, **mpv**, and any MPRIS-enabled player.
@@ -45,6 +45,9 @@ install -Dm644 foot-kymat.ini ~/.config/kymat/foot-kymat.ini
 install -Dm644 config.toml.example ~/.config/kymat/config.toml
 install -Dm644 assets/kymat.desktop ~/.local/share/applications/kymat.desktop
 ```
+
+> **Optional CJK Lyrics & Titles Support (Japanese, Korean, Chinese):**  
+> Install `noto-fonts-cjk` (e.g. `sudo pacman -S noto-fonts-cjk` on Arch/Omarchy) so both pixel-art lyrics and terminal titles render Kana, Kanji, Hangul, and Hanzi cleanly.
 
 ---
 

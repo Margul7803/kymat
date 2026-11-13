@@ -151,8 +151,8 @@ impl AppConfig {
 
     pub fn sync_foot_config(&self) {
         let content = format!(
-            "[main]\nfont=JetBrainsMono Nerd Font:size={}\npad=0x0\n\n[colors-dark]\nbackground=050508\nforeground=ffffff\n",
-            self.font_size
+            "[main]\nfont=JetBrainsMono Nerd Font:size={},Noto Sans CJK JP:size={}\npad=0x0\n\n[colors-dark]\nbackground=050508\nforeground=ffffff\n",
+            self.font_size, self.font_size
         );
         if let Some(path) = Self::foot_config_path() {
             if let Some(parent) = path.parent() {

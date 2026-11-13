@@ -1,10 +1,13 @@
 use crate::media::lyrics::SyncedLyrics;
 use crate::ui::background::{AmbientBackground, lerp_oklab, oklab_to_rgb, rgb_to_oklab};
-use crate::ui::cover_widget::Rgb;
+use crate::ui::cover_widget::{Rgb, fit_text_to_cols};
+use crate::ui::glyph_fallback::GlyphFallbackCache;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::time::Duration;
+use unicode_normalization::UnicodeNormalization;
+use unicode_width::UnicodeWidthChar;
 
 /// 2x2 Unicode quadrant partition table (bits: 0=TL, 1=TR, 2=BL, 3=BR)
 const QUADRANT_PATTERNS: [(u8, char); 8] = [
@@ -18,12 +21,12 @@ const QUADRANT_PATTERNS: [(u8, char); 8] = [
     (0b0111, '▛'),
 ];
 
-const SUB_H: usize = 8;
-const SUB_LINE_ROWS: i32 = 4;
+const DEFAULT_SUB_H: usize = 8;
+const CJK_SUB_H: usize = 10;
 const ENTRY_GAP_ROWS: i32 = 1;
 
 struct CachedSubLine {
-    /// Sharp unblurred sub-pixel grid of size `max_sub_w * 8`
+    /// Sharp unblurred sub-pixel grid of size `max_sub_w * sub_h`
     sharp_grid: Vec<f32>,
     /// Pre-blurred sub-pixel grid for inactive lines, computed once at layout time
     blurred_grid: Vec<f32>,
@@ -44,7 +47,10 @@ pub struct LyricsScrollState {
     cached_first_text: String,
     cached_wrap_chars: usize,
     cached_max_sub_w: usize,
+    cached_sub_h: usize,
+    sub_line_rows: i32,
     entries: Vec<CachedLyricEntry>,
+    glyph_cache: GlyphFallbackCache,
 }
 
 impl LyricsScrollState {
@@ -72,12 +78,18 @@ impl LyricsScrollState {
         self.smooth_row
     }
 
-    fn ensure_layout(&mut self, lyrics: &SyncedLyrics, wrap_chars: usize, max_sub_w: usize) {
+    fn ensure_layout(&mut self, lyrics: &SyncedLyrics, max_sub_w: usize) {
         let first_text = lyrics.lines.first().map(|l| l.text.as_str()).unwrap_or("");
+        let has_cjk = lyrics
+            .lines
+            .iter()
+            .any(|l| l.text.chars().any(is_cjk_or_hangul));
+        let sub_h = if has_cjk { CJK_SUB_H } else { DEFAULT_SUB_H };
+        let sub_line_rows = (sub_h / 2) as i32;
 
         if self.cached_line_count == lyrics.lines.len()
-            && self.cached_wrap_chars == wrap_chars
             && self.cached_max_sub_w == max_sub_w
+            && self.cached_sub_h == sub_h
             && self.cached_first_text == first_text
             && !self.entries.is_empty()
         {
@@ -86,24 +98,28 @@ impl LyricsScrollState {
 
         self.cached_line_count = lyrics.lines.len();
         self.cached_first_text = first_text.to_string();
-        self.cached_wrap_chars = wrap_chars;
+        self.cached_wrap_chars = max_sub_w;
         self.cached_max_sub_w = max_sub_w;
+        self.cached_sub_h = sub_h;
+        self.sub_line_rows = sub_line_rows;
         self.entries.clear();
         self.entries.reserve(lyrics.lines.len());
 
-        let mut blur_temp = vec![0.0_f32; max_sub_w * SUB_H];
+        let mut blur_temp = vec![0.0_f32; max_sub_w * sub_h];
         let mut cursor_y = 0i32;
+
         for line in &lyrics.lines {
-            let wrapped = wrap_lyric_text(&line.text, wrap_chars);
+            let wrapped = wrap_lyric_text_subpixel(&line.text, max_sub_w, &mut self.glyph_cache, sub_h);
             let mut sub_lines = Vec::with_capacity(wrapped.len());
             for sub_text in &wrapped {
-                let (sharp_grid, used_sub_w) = rasterize_line_subpixels(sub_text, max_sub_w);
+                let (sharp_grid, used_sub_w) =
+                    rasterize_line_subpixels_with_cache(sub_text, max_sub_w, sub_h, &mut self.glyph_cache);
                 let mut blurred_grid = sharp_grid.clone();
                 apply_gaussian_blur_in_place(
                     &mut blurred_grid,
                     &mut blur_temp,
                     max_sub_w,
-                    SUB_H,
+                    sub_h,
                     0.65,
                 );
                 sub_lines.push(CachedSubLine {
@@ -112,7 +128,7 @@ impl LyricsScrollState {
                     used_sub_w,
                 });
             }
-            let h = (sub_lines.len() as i32) * SUB_LINE_ROWS;
+            let h = (sub_lines.len() as i32) * sub_line_rows;
             self.entries.push(CachedLyricEntry {
                 virtual_y: cursor_y,
                 sub_lines,
@@ -122,29 +138,167 @@ impl LyricsScrollState {
     }
 }
 
-/// Word-wraps a lyric line into sub-lines of at most `max_width` characters
+#[inline]
+fn is_cjk_or_hangul(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3000}'..='\u{303F}' // CJK Symbols and Punctuation
+            | '\u{3040}'..='\u{309F}' // Hiragana
+            | '\u{30A0}'..='\u{30FF}' // Katakana
+            | '\u{3130}'..='\u{318F}' // Hangul Compatibility Jamo
+            | '\u{31F0}'..='\u{31FF}' // Katakana Phonetic Extensions
+            | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+            | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+            | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
+            | '\u{FF00}'..='\u{FFEF}' // Halfwidth and Fullwidth Forms
+    )
+}
+
+/// Characters where line breaks can occur directly before/after without whitespace (Japanese/Chinese).
+/// Korean Hangul uses spaces between words, so only non-Hangul CJK breaks between chars by default.
+#[inline]
+fn is_cjk_breakable_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3040}'..='\u{309F}' // Hiragana
+            | '\u{30A0}'..='\u{30FF}' // Katakana
+            | '\u{31F0}'..='\u{31FF}' // Katakana Phonetic Extensions
+            | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Ext A
+            | '\u{4E00}'..='\u{9FFF}' // CJK Unified Ideographs
+            | '\u{3000}'..='\u{303F}' // CJK Punctuation
+            | '\u{FF01}'..='\u{FF60}' // Fullwidth forms
+    )
+}
+
+#[inline]
+fn is_no_line_start(ch: char) -> bool {
+    matches!(
+        ch,
+        '、' | '。'
+            | '，'
+            | '．'
+            | '！'
+            | '？'
+            | '・'
+            | 'ー'
+            | '〜'
+            | '」'
+            | '』'
+            | '】'
+            | '）'
+            | '］'
+            | '…'
+            | '.'
+            | ','
+            | '!'
+            | '?'
+            | ')'
+            | ']'
+            | '»'
+    )
+}
+
+#[inline]
+fn is_no_line_end(ch: char) -> bool {
+    matches!(ch, '「' | '『' | '【' | '（' | '［' | '(' | '[' | '«')
+}
+
+/// Tokenizes a lyric line into wrap units: whitespace-delimited words for alphabetic/Korean text,
+/// and individual kinsoku-respecting clusters for Japanese/Chinese without spaces.
+fn tokenize_wrap_units(text: &str) -> Vec<(String, bool)> {
+    let mut units: Vec<(String, bool)> = Vec::new();
+    let mut buf = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch.is_whitespace() {
+            if !buf.is_empty() {
+                units.push((std::mem::take(&mut buf), false));
+            }
+            // Mark that whitespace preceded the next token
+            if let Some(last) = units.last_mut() {
+                last.1 = true;
+            }
+            continue;
+        }
+
+        if is_cjk_breakable_char(ch) {
+            if !buf.is_empty() {
+                if is_no_line_start(ch) {
+                    buf.push(ch);
+                    continue;
+                }
+                units.push((std::mem::take(&mut buf), false));
+            }
+            buf.push(ch);
+            // Attach any trailing no-line-start punctuation (e.g. `。`, `、`, `」`)
+            while let Some(&next_ch) = chars.peek() {
+                if is_no_line_start(next_ch) && !next_ch.is_whitespace() {
+                    buf.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            // If `ch` cannot end a line (e.g. `「`), merge the following character into this unit
+            if is_no_line_end(ch) {
+                if let Some(&next_ch) = chars.peek() {
+                    if !next_ch.is_whitespace() {
+                        buf.push(chars.next().unwrap());
+                    }
+                }
+            }
+            units.push((std::mem::take(&mut buf), false));
+        } else {
+            buf.push(ch);
+        }
+    }
+
+    if !buf.is_empty() {
+        units.push((buf, false));
+    }
+
+    units
+}
+
+/// Word-wraps a lyric line into sub-lines of at most `max_width` display columns
 pub fn wrap_lyric_text(text: &str, max_width: usize) -> Vec<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let normalized: String = text.trim().nfc().collect();
+    if normalized.is_empty() {
         return vec!["• • •".to_string()];
     }
     let limit = max_width.clamp(14, 42);
+    let units = tokenize_wrap_units(&normalized);
     let mut wrapped = Vec::new();
     let mut current = String::new();
+    let mut cur_w = 0usize;
+    let mut pending_space = false;
 
-    for word in trimmed.split_whitespace() {
-        let word_len = word.chars().count();
-        let cur_len = current.chars().count();
-        if cur_len == 0 {
-            current.push_str(word);
-        } else if cur_len + 1 + word_len <= limit {
-            current.push(' ');
-            current.push_str(word);
+    for (unit, trailing_space) in units {
+        let unit_w: usize = unit
+            .chars()
+            .map(|c| c.width().unwrap_or(1).max(1))
+            .sum();
+
+        if cur_w == 0 {
+            current.push_str(&unit);
+            cur_w = unit_w;
         } else {
-            wrapped.push(current);
-            current = word.to_string();
+            let space_w = usize::from(pending_space);
+            if cur_w + space_w + unit_w <= limit {
+                if pending_space {
+                    current.push(' ');
+                }
+                current.push_str(&unit);
+                cur_w += space_w + unit_w;
+            } else {
+                wrapped.push(current);
+                current = unit;
+                cur_w = unit_w;
+            }
         }
+        pending_space = trailing_space;
     }
+
     if !current.is_empty() {
         wrapped.push(current);
     }
@@ -154,92 +308,255 @@ pub fn wrap_lyric_text(text: &str, max_width: usize) -> Vec<String> {
     wrapped
 }
 
-/// Returns the 5x6 sub-pixel bitmap matrix (width 5, height 6 = 3 terminal rows in 2x2 quadrants)
-/// and horizontal sub-pixel advance for a character.
-fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
+fn measure_char_subpixel_advance(
+    ch: char,
+    sub_h: usize,
+    glyph_cache: &mut GlyphFallbackCache,
+) -> usize {
+    if let Some((_, adv)) = glyph_bitmap_5x6(ch) {
+        adv
+    } else if let Some(g) = glyph_cache.get_or_rasterize(ch, sub_h) {
+        g.advance
+    } else {
+        4
+    }
+}
+
+fn wrap_lyric_text_subpixel(
+    text: &str,
+    max_sub_w: usize,
+    glyph_cache: &mut GlyphFallbackCache,
+    sub_h: usize,
+) -> Vec<String> {
+    let normalized: String = text.trim().nfc().collect();
+    if normalized.is_empty() {
+        return vec!["• • •".to_string()];
+    }
+
+    let usable_w = max_sub_w.saturating_sub(4).max(12);
+    let space_adv = measure_char_subpixel_advance(' ', sub_h, glyph_cache) + 1;
+    let units = tokenize_wrap_units(&normalized);
+
+    let mut wrapped = Vec::new();
+    let mut current = String::new();
+    let mut cur_sub_w = 0usize;
+    let mut pending_space = false;
+
+    for (unit, trailing_space) in units {
+        let unit_sub_w: usize = unit
+            .chars()
+            .map(|c| measure_char_subpixel_advance(c, sub_h, glyph_cache) + 1)
+            .sum();
+
+        if cur_sub_w == 0 {
+            if unit_sub_w <= usable_w {
+                current.push_str(&unit);
+                cur_sub_w = unit_sub_w;
+            } else {
+                // Emergency split if a single long word exceeds the whole column width
+                for ch in unit.chars() {
+                    let ch_w = measure_char_subpixel_advance(ch, sub_h, glyph_cache) + 1;
+                    if cur_sub_w > 0 && cur_sub_w + ch_w > usable_w {
+                        wrapped.push(std::mem::take(&mut current));
+                        cur_sub_w = 0;
+                    }
+                    current.push(ch);
+                    cur_sub_w += ch_w;
+                }
+            }
+        } else {
+            let gap = if pending_space { space_adv } else { 0 };
+            if cur_sub_w + gap + unit_sub_w <= usable_w {
+                if pending_space {
+                    current.push(' ');
+                }
+                current.push_str(&unit);
+                cur_sub_w += gap + unit_sub_w;
+            } else {
+                wrapped.push(std::mem::take(&mut current));
+                if unit_sub_w <= usable_w {
+                    current.push_str(&unit);
+                    cur_sub_w = unit_sub_w;
+                } else {
+                    cur_sub_w = 0;
+                    for ch in unit.chars() {
+                        let ch_w = measure_char_subpixel_advance(ch, sub_h, glyph_cache) + 1;
+                        if cur_sub_w > 0 && cur_sub_w + ch_w > usable_w {
+                            wrapped.push(std::mem::take(&mut current));
+                            cur_sub_w = 0;
+                        }
+                        current.push(ch);
+                        cur_sub_w += ch_w;
+                    }
+                }
+            }
+        }
+
+        pending_space = trailing_space;
+    }
+
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+    if wrapped.is_empty() {
+        wrapped.push("• • •".to_string());
+    }
+    wrapped
+}
+
+/// Returns the 5x6 sub-pixel bitmap matrix (width 5, height 6) and horizontal sub-pixel
+/// advance for supported alphabetic / punctuation characters, or `None` for scripts handled
+/// by the dynamic fallback font rasterizer (Japanese, Korean, Chinese, etc.).
+fn glyph_bitmap_5x6(ch: char) -> Option<([u8; 6], usize)> {
     let c = match ch {
         '’' | '‘' | '`' => '\'',
         '–' | '—' => '-',
+        '“' | '”' | '„' => '"',
         'œ' => 'o',
         'Œ' => 'O',
+        // Greek accented vowels -> base glyphs
+        'Ά' | 'Ἀ' | 'Ἁ' => 'Α',
+        'Έ' | 'Ἐ' | 'Ἑ' => 'Ε',
+        'Ή' | 'Ἠ' | 'Ἡ' => 'Η',
+        'Ί' | 'Ϊ' | 'Ἰ' | 'Ἱ' => 'Ι',
+        'Ό' | 'Ὀ' | 'Ὁ' => 'Ο',
+        'Ύ' | 'Ϋ' | 'Ὑ' => 'Υ',
+        'Ώ' | 'Ω' | 'Ὠ' | 'Ὡ' => 'Ω',
+        'ά' | 'ἀ' | 'ἁ' => 'α',
+        'έ' | 'ἐ' | 'ἑ' => 'ε',
+        'ή' | 'ἠ' | 'ἡ' => 'η',
+        'ί' | 'ϊ' | 'ΐ' | 'ἰ' | 'ἱ' => 'ι',
+        'ό' | 'ὀ' | 'ὁ' => 'ο',
+        'ύ' | 'ϋ' | 'ΰ' | 'ὐ' | 'ὑ' => 'υ',
+        'ώ' | 'ὠ' | 'ὡ' => 'ω',
         other => other,
     };
 
-    match c {
+    let res = match c {
         ' ' => ([0, 0, 0, 0, 0, 0], 3),
         '.' => ([0, 0, 0, 0, 0b01100, 0b01100], 3),
         ',' => ([0, 0, 0, 0, 0b00110, 0b01100], 3),
         '\'' => ([0b01100, 0b01100, 0, 0, 0, 0], 3),
+        '"' => ([0b11011, 0b11011, 0, 0, 0, 0], 5),
         '-' => ([0, 0, 0b11110, 0, 0, 0], 4),
         '!' => ([0b01100, 0b01100, 0b01100, 0, 0b01100, 0], 3),
+        '¡' => ([0b01100, 0, 0b01100, 0b01100, 0b01100, 0], 3),
         '?' => ([0b01110, 0b10011, 0b00110, 0b00100, 0, 0b00100], 5),
+        '¿' => ([0b00100, 0, 0b00100, 0b01100, 0b10011, 0b01110], 5),
+        ':' => ([0, 0b01100, 0b01100, 0, 0b01100, 0b01100], 3),
+        ';' => ([0, 0b01100, 0, 0b01100, 0b00110, 0b01100], 3),
+        '/' => ([0b00011, 0b00110, 0b01100, 0b11000, 0b10000, 0], 5),
+        '&' => ([0b01100, 0b10010, 0b01100, 0b10101, 0b01111, 0], 5),
+        '+' => ([0, 0b00100, 0b01110, 0b00100, 0, 0], 4),
+        '*' => ([0b10101, 0b01110, 0b10101, 0, 0, 0], 5),
+        '~' => ([0, 0b01001, 0b10110, 0, 0, 0], 5),
+        '=' => ([0, 0b11110, 0, 0b11110, 0, 0], 4),
         '•' => ([0, 0, 0b01100, 0b01100, 0, 0], 4),
+        '…' => ([0, 0, 0, 0, 0b10101, 0], 5),
         '(' => ([0b00110, 0b01100, 0b01100, 0b01100, 0b00110, 0], 4),
         ')' => ([0b01100, 0b00110, 0b00110, 0b00110, 0b01100, 0], 4),
+        '[' => ([0b01110, 0b01100, 0b01100, 0b01100, 0b01110, 0], 4),
+        ']' => ([0b01110, 0b00110, 0b00110, 0b00110, 0b01110, 0], 4),
+        '«' => ([0, 0b01010, 0b10100, 0b01010, 0, 0], 5),
+        '»' => ([0, 0b10100, 0b01010, 0b10100, 0, 0], 5),
 
-        // Uppercase
-        'A' | 'À' | 'Â' => ([0b01110, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        // Latin Uppercase & Extended Latin
+        'A' | 'À' | 'Â' | 'Á' | 'Ã' | 'Ä' | 'Å' | 'Ă' | 'Ą' => {
+            ([0b01110, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5)
+        }
+        'Æ' => ([0b01111, 0b10100, 0b11110, 0b10100, 0b10111, 0], 5),
         'B' => ([0b11110, 0b11011, 0b11110, 0b11011, 0b11110, 0], 5),
-        'C' | 'Ç' => ([0b01111, 0b11000, 0b11000, 0b11000, 0b01111, 0], 5),
-        'D' => ([0b11110, 0b11011, 0b11011, 0b11011, 0b11110, 0], 5),
-        'E' | 'É' | 'È' | 'Ê' | 'Ë' => ([0b11111, 0b11000, 0b11110, 0b11000, 0b11111, 0], 5),
+        'C' | 'Ç' | 'Ć' | 'Č' => ([0b01111, 0b11000, 0b11000, 0b11000, 0b01111, 0], 5),
+        'D' | 'Ď' => ([0b11110, 0b11011, 0b11011, 0b11011, 0b11110, 0], 5),
+        'Đ' | 'Ð' => ([0b11110, 0b01011, 0b11111, 0b01011, 0b11110, 0], 5),
+        'E' | 'É' | 'È' | 'Ê' | 'Ë' | 'Ę' | 'Ě' => {
+            ([0b11111, 0b11000, 0b11110, 0b11000, 0b11111, 0], 5)
+        }
         'F' => ([0b11111, 0b11000, 0b11110, 0b11000, 0b11000, 0], 5),
-        'G' => ([0b01111, 0b11000, 0b11011, 0b11011, 0b01111, 0], 5),
+        'G' | 'Ğ' => ([0b01111, 0b11000, 0b11011, 0b11011, 0b01111, 0], 5),
         'H' => ([0b11011, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
-        'I' | 'Î' | 'Ï' => ([0b01110, 0b00100, 0b00100, 0b00100, 0b01110, 0], 4),
+        'I' | 'Î' | 'Ï' | 'Í' | 'Ì' | 'İ' => {
+            ([0b01110, 0b00100, 0b00100, 0b00100, 0b01110, 0], 4)
+        }
         'J' => ([0b00111, 0b00011, 0b00011, 0b11011, 0b01110, 0], 5),
         'K' => ([0b11011, 0b11110, 0b11100, 0b11110, 0b11011, 0], 5),
         'L' => ([0b11000, 0b11000, 0b11000, 0b11000, 0b11111, 0], 5),
+        'Ł' => ([0b01000, 0b01000, 0b11100, 0b01000, 0b01111, 0], 5),
         'M' => ([0b10001, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
-        'N' => ([0b11011, 0b11111, 0b11111, 0b11011, 0b11011, 0], 5),
-        'O' | 'Ô' => ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
+        'N' | 'Ń' | 'Ň' => ([0b11011, 0b11111, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Ñ' => ([0b01110, 0b11011, 0b11111, 0b11111, 0b11011, 0b11011], 5),
+        'O' | 'Ô' | 'Ó' | 'Ò' | 'Õ' | 'Ö' => {
+            ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5)
+        }
+        'Ø' => ([0b01111, 0b11011, 0b11111, 0b11011, 0b11110, 0], 5),
         'P' => ([0b11110, 0b11011, 0b11110, 0b11000, 0b11000, 0], 5),
         'Q' => ([0b01110, 0b11011, 0b11011, 0b11111, 0b01111, 0b00011], 5),
-        'R' => ([0b11110, 0b11011, 0b11110, 0b11110, 0b11011, 0], 5),
-        'S' => ([0b01111, 0b11000, 0b01110, 0b00011, 0b11110, 0], 5),
-        'T' => ([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0], 5),
-        'U' | 'Ù' | 'Û' | 'Ü' => ([0b11011, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
+        'R' | 'Ř' => ([0b11110, 0b11011, 0b11110, 0b11110, 0b11011, 0], 5),
+        'S' | 'Ś' | 'Š' | 'Ş' | 'Ș' => {
+            ([0b01111, 0b11000, 0b01110, 0b00011, 0b11110, 0], 5)
+        }
+        'T' | 'Ť' | 'Ţ' | 'Ț' => ([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0], 5),
+        'U' | 'Ù' | 'Û' | 'Ü' | 'Ú' | 'Ů' => {
+            ([0b11011, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5)
+        }
         'V' => ([0b11011, 0b11011, 0b11011, 0b01110, 0b00100, 0], 5),
         'W' => ([0b11011, 0b11011, 0b11111, 0b11111, 0b10001, 0], 5),
         'X' => ([0b11011, 0b01110, 0b00100, 0b01110, 0b11011, 0], 5),
-        'Y' => ([0b11011, 0b01110, 0b00100, 0b00100, 0b00100, 0], 5),
-        'Z' => ([0b11111, 0b00110, 0b01100, 0b11000, 0b11111, 0], 5),
+        'Y' | 'Ý' => ([0b11011, 0b01110, 0b00100, 0b00100, 0b00100, 0], 5),
+        'Z' | 'Ź' | 'Ż' | 'Ž' => ([0b11111, 0b00110, 0b01100, 0b11000, 0b11111, 0], 5),
 
-        // Lowercase & accented vowels
+        // Latin Lowercase & Extended Latin Lowercase
         'a' => ([0, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
-        'à' | 'â' => ([0b01100, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'à' | 'â' | 'ã' | 'ă' => ([0b01100, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'á' => ([0b00110, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'ä' | 'å' => ([0b01010, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'ą' => ([0, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'æ' => ([0, 0b01110, 0b10111, 0b11100, 0b10111, 0], 5),
         'b' => ([0b11000, 0b11000, 0b11110, 0b11011, 0b11110, 0], 5),
         'c' => ([0, 0b01111, 0b11000, 0b11000, 0b01111, 0], 5),
         'ç' => ([0, 0b01111, 0b11000, 0b11000, 0b01111, 0b00100], 5),
-        'd' => ([0b00011, 0b00011, 0b01111, 0b11011, 0b01111, 0], 5),
+        'ć' | 'č' => ([0b00110, 0b01111, 0b11000, 0b11000, 0b01111, 0], 5),
+        'd' | 'ď' => ([0b00011, 0b00011, 0b01111, 0b11011, 0b01111, 0], 5),
+        'đ' => ([0b00111, 0b00011, 0b01111, 0b11011, 0b01111, 0], 5),
         'e' => ([0, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
         'é' => ([0b00110, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
         'è' => ([0b01100, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
-        'ê' | 'ë' => ([0b01110, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
+        'ê' | 'ë' | 'ě' | 'ę' => ([0b01110, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
         'f' => ([0b00111, 0b01100, 0b11110, 0b01100, 0b01100, 0], 4),
         'g' => ([0, 0b01111, 0b11011, 0b01111, 0b00011, 0b01110], 5),
+        'ğ' => ([0b01110, 0b01111, 0b11011, 0b01111, 0b00011, 0b01110], 5),
         'h' => ([0b11000, 0b11000, 0b11110, 0b11011, 0b11011, 0], 5),
-        'i' => ([0b01100, 0, 0b01100, 0b01100, 0b01100, 0], 3),
+        'i' | 'í' | 'ì' => ([0b01100, 0, 0b01100, 0b01100, 0b01100, 0], 3),
+        'ı' => ([0, 0, 0b01100, 0b01100, 0b01100, 0], 3),
         'î' | 'ï' => ([0b01110, 0, 0b01100, 0b01100, 0b01100, 0], 3),
         'j' => ([0b00110, 0, 0b00110, 0b00110, 0b10110, 0b01100], 4),
         'k' => ([0b11000, 0b11011, 0b11110, 0b11110, 0b11011, 0], 5),
         'l' => ([0b01100, 0b01100, 0b01100, 0b01100, 0b00110, 0], 3),
+        'ł' => ([0b01100, 0b11100, 0b01100, 0b01100, 0b00110, 0], 4),
         'm' => ([0, 0b11010, 0b11111, 0b11111, 0b11011, 0], 5),
         'n' => ([0, 0b11110, 0b11011, 0b11011, 0b11011, 0], 5),
+        'ñ' | 'ń' | 'ň' => ([0b01110, 0, 0b11110, 0b11011, 0b11011, 0b11011], 5),
         'o' => ([0, 0b01110, 0b11011, 0b11011, 0b01110, 0], 5),
-        'ô' => ([0b01110, 0b01110, 0b11011, 0b11011, 0b01110, 0], 5),
+        'ô' | 'ó' | 'ò' | 'õ' | 'ö' => ([0b01010, 0b01110, 0b11011, 0b11011, 0b01110, 0], 5),
+        'ø' => ([0, 0b01111, 0b11011, 0b11111, 0b11110, 0], 5),
         'p' => ([0, 0b11110, 0b11011, 0b11110, 0b11000, 0b11000], 5),
         'q' => ([0, 0b01111, 0b11011, 0b01111, 0b00011, 0b00011], 5),
         'r' => ([0, 0b11110, 0b11000, 0b11000, 0b11000, 0], 4),
+        'ř' => ([0b01010, 0b11110, 0b11000, 0b11000, 0b11000, 0], 4),
         's' => ([0, 0b01111, 0b11100, 0b00111, 0b11110, 0], 5),
-        't' => ([0b01100, 0b11110, 0b01100, 0b01100, 0b00111, 0], 4),
+        'ś' | 'š' => ([0b01010, 0b01111, 0b11100, 0b00111, 0b11110, 0], 5),
+        'ş' | 'ș' => ([0, 0b01111, 0b11100, 0b00111, 0b11110, 0b00100], 5),
+        'ß' => ([0b01110, 0b11011, 0b11110, 0b11011, 0b11110, 0b11000], 5),
+        't' | 'ť' => ([0b01100, 0b11110, 0b01100, 0b01100, 0b00111, 0], 4),
+        'ţ' | 'ț' => ([0b01100, 0b11110, 0b01100, 0b01100, 0b00111, 0b00100], 4),
         'u' => ([0, 0b11011, 0b11011, 0b11011, 0b01111, 0], 5),
-        'ù' | 'û' | 'ü' => ([0b01100, 0b11011, 0b11011, 0b11011, 0b01111, 0], 5),
+        'ù' | 'û' | 'ü' | 'ú' | 'ů' => ([0b01010, 0b11011, 0b11011, 0b11011, 0b01111, 0], 5),
         'v' => ([0, 0b11011, 0b11011, 0b01110, 0b00100, 0], 5),
         'w' => ([0, 0b11011, 0b11111, 0b11111, 0b01010, 0], 5),
         'x' => ([0, 0b11011, 0b01110, 0b01110, 0b11011, 0], 5),
-        'y' => ([0, 0b11011, 0b11011, 0b01111, 0b00011, 0b01110], 5),
+        'y' | 'ý' | 'ÿ' => ([0, 0b11011, 0b11011, 0b01111, 0b00011, 0b01110], 5),
         'z' => ([0, 0b11111, 0b00110, 0b01100, 0b11111, 0], 5),
+        'ź' | 'ż' | 'ž' => ([0b01010, 0b11111, 0b00110, 0b01100, 0b11111, 0], 5),
 
         // Digits
         '0' => ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
@@ -253,36 +570,242 @@ fn glyph_bitmap_5x6(ch: char) -> ([u8; 6], usize) {
         '8' => ([0b01110, 0b11011, 0b01110, 0b11011, 0b01110, 0], 5),
         '9' => ([0b01110, 0b11011, 0b01111, 0b00011, 0b11110, 0], 5),
 
-        _ => ([0, 0b01110, 0b01110, 0b01110, 0, 0], 4),
-    }
+        // Cyrillic Uppercase (Russian, Ukrainian, Belarusian, Serbian, Bulgarian)
+        'А' => ([0b01110, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Б' => ([0b11111, 0b11000, 0b11110, 0b11011, 0b11110, 0], 5),
+        'В' => ([0b11110, 0b11011, 0b11110, 0b11011, 0b11110, 0], 5),
+        'Г' => ([0b11111, 0b11000, 0b11000, 0b11000, 0b11000, 0], 5),
+        'Ґ' => ([0b11111, 0b11001, 0b11000, 0b11000, 0b11000, 0], 5),
+        'Д' => ([0b01110, 0b01010, 0b01010, 0b11111, 0b10001, 0], 5),
+        'Е' => ([0b11111, 0b11000, 0b11110, 0b11000, 0b11111, 0], 5),
+        'Ё' => ([0b01010, 0b11111, 0b11000, 0b11110, 0b11000, 0b11111], 5),
+        'Є' => ([0b01111, 0b11000, 0b11110, 0b11000, 0b01111, 0], 5),
+        'Ж' => ([0b10101, 0b10101, 0b01110, 0b10101, 0b10101, 0], 5),
+        'З' => ([0b11110, 0b00011, 0b01110, 0b00011, 0b11110, 0], 5),
+        'И' => ([0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0], 5),
+        'Й' => ([0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001], 5),
+        'І' => ([0b01110, 0b00100, 0b00100, 0b00100, 0b01110, 0], 4),
+        'Ї' => ([0b01010, 0b01110, 0b00100, 0b00100, 0b00100, 0b01110], 4),
+        'К' => ([0b11011, 0b11110, 0b11100, 0b11110, 0b11011, 0], 5),
+        'Л' => ([0b01111, 0b01001, 0b01001, 0b01001, 0b11001, 0], 5),
+        'М' => ([0b10001, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Н' => ([0b11011, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'О' => ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
+        'П' => ([0b11111, 0b11011, 0b11011, 0b11011, 0b11011, 0], 5),
+        'Р' => ([0b11110, 0b11011, 0b11110, 0b11000, 0b11000, 0], 5),
+        'С' => ([0b01111, 0b11000, 0b11000, 0b11000, 0b01111, 0], 5),
+        'Т' => ([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0], 5),
+        'У' => ([0b11011, 0b11011, 0b01111, 0b00011, 0b11110, 0], 5),
+        'Ў' => ([0b01110, 0b11011, 0b11011, 0b01111, 0b00011, 0b11110], 5),
+        'Ф' => ([0b00100, 0b01110, 0b10101, 0b10101, 0b01110, 0b00100], 5),
+        'Х' => ([0b11011, 0b01110, 0b00100, 0b01110, 0b11011, 0], 5),
+        'Ц' => ([0b10010, 0b10010, 0b10010, 0b10010, 0b11111, 0b00001], 5),
+        'Ч' => ([0b11011, 0b11011, 0b01111, 0b00011, 0b00011, 0], 5),
+        'Ш' => ([0b10101, 0b10101, 0b10101, 0b10101, 0b11111, 0], 5),
+        'Щ' => ([0b10101, 0b10101, 0b10101, 0b10101, 0b11111, 0b00001], 5),
+        'Ъ' => ([0b11000, 0b01000, 0b01110, 0b01011, 0b01110, 0], 5),
+        'Ы' => ([0b10001, 0b10001, 0b11101, 0b10101, 0b11101, 0], 5),
+        'Ь' => ([0b11000, 0b11000, 0b11110, 0b11011, 0b11110, 0], 5),
+        'Э' => ([0b01110, 0b00011, 0b01111, 0b00011, 0b01110, 0], 5),
+        'Ю' => ([0b10010, 0b10101, 0b11101, 0b10101, 0b10010, 0], 5),
+        'Я' => ([0b01111, 0b11011, 0b01111, 0b01011, 0b11011, 0], 5),
+        'Ј' => ([0b00111, 0b00011, 0b00011, 0b11011, 0b01110, 0], 5),
+        'Ђ' | 'Ћ' => ([0b11110, 0b01000, 0b01110, 0b01011, 0b01011, 0], 5),
+        'Љ' => ([0b01110, 0b01010, 0b01011, 0b11010, 0b11011, 0], 5),
+        'Њ' => ([0b10100, 0b11110, 0b10101, 0b10110, 0b10100, 0], 5),
+        'Џ' => ([0b10001, 0b10001, 0b10001, 0b11111, 0b00100, 0], 5),
+
+        // Cyrillic Lowercase
+        'а' => ([0, 0b01110, 0b00011, 0b01111, 0b11011, 0b01111], 5),
+        'б' => ([0b00111, 0b01000, 0b11110, 0b11011, 0b01110, 0], 5),
+        'в' => ([0, 0b11110, 0b11100, 0b11011, 0b11110, 0], 5),
+        'г' => ([0, 0b11111, 0b11000, 0b11000, 0b11000, 0], 5),
+        'ґ' => ([0b00001, 0b11111, 0b11000, 0b11000, 0b11000, 0], 5),
+        'д' => ([0, 0b01110, 0b01010, 0b01010, 0b11111, 0b10001], 5),
+        'е' => ([0, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
+        'ё' => ([0b01010, 0b01110, 0b11011, 0b11111, 0b11000, 0b01111], 5),
+        'є' => ([0, 0b01111, 0b11000, 0b11110, 0b01111, 0], 5),
+        'ж' => ([0, 0b10101, 0b01110, 0b01110, 0b10101, 0], 5),
+        'з' => ([0, 0b11110, 0b00110, 0b00011, 0b11110, 0], 5),
+        'и' => ([0, 0b10011, 0b10101, 0b11001, 0b10001, 0], 5),
+        'й' => ([0b01110, 0b10011, 0b10101, 0b11001, 0b10001, 0], 5),
+        'і' => ([0b01100, 0, 0b01100, 0b01100, 0b01100, 0], 3),
+        'ї' => ([0b10100, 0, 0b01100, 0b01100, 0b01100, 0], 4),
+        'к' => ([0, 0b11011, 0b11110, 0b11100, 0b11011, 0], 5),
+        'л' => ([0, 0b01111, 0b01001, 0b01001, 0b11001, 0], 5),
+        'м' => ([0, 0b10001, 0b11011, 0b10101, 0b10001, 0], 5),
+        'н' => ([0, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'о' => ([0, 0b01110, 0b11011, 0b11011, 0b01110, 0], 5),
+        'п' => ([0, 0b11111, 0b11011, 0b11011, 0b11011, 0], 5),
+        'р' => ([0, 0b11110, 0b11011, 0b11110, 0b11000, 0b11000], 5),
+        'с' => ([0, 0b01111, 0b11000, 0b11000, 0b01111, 0], 5),
+        'т' => ([0, 0b11111, 0b00100, 0b00100, 0b00100, 0], 5),
+        'у' => ([0, 0b11011, 0b11011, 0b01111, 0b00011, 0b11110], 5),
+        'ў' => ([0b01110, 0b11011, 0b11011, 0b01111, 0b00011, 0b11110], 5),
+        'ф' => ([0, 0b01110, 0b10101, 0b01110, 0b00100, 0b00100], 5),
+        'х' => ([0, 0b11011, 0b01110, 0b01110, 0b11011, 0], 5),
+        'ц' => ([0, 0b10010, 0b10010, 0b10010, 0b11111, 0b00001], 5),
+        'ч' => ([0, 0b11011, 0b01111, 0b00011, 0b00011, 0], 5),
+        'ш' => ([0, 0b10101, 0b10101, 0b10101, 0b11111, 0], 5),
+        'щ' => ([0, 0b10101, 0b10101, 0b10101, 0b11111, 0b00001], 5),
+        'ъ' => ([0, 0b11000, 0b01110, 0b01011, 0b01110, 0], 5),
+        'ы' => ([0, 0b10001, 0b11101, 0b10101, 0b11101, 0], 5),
+        'ь' => ([0, 0b11000, 0b11110, 0b11011, 0b11110, 0], 5),
+        'э' => ([0, 0b01110, 0b00111, 0b00011, 0b01110, 0], 5),
+        'ю' => ([0, 0b10010, 0b11101, 0b10101, 0b10010, 0], 5),
+        'я' => ([0, 0b01111, 0b11011, 0b01111, 0b11011, 0], 5),
+        'ј' => ([0b00110, 0, 0b00110, 0b00110, 0b10110, 0b01100], 4),
+        'ђ' | 'ћ' => ([0b11100, 0b01000, 0b01110, 0b01011, 0b01011, 0], 5),
+        'љ' => ([0, 0b01110, 0b01010, 0b11011, 0b11010, 0], 5),
+        'њ' => ([0, 0b10100, 0b11110, 0b10101, 0b10110, 0], 5),
+        'џ' => ([0, 0b10001, 0b10001, 0b11111, 0b00100, 0], 5),
+
+        // Greek Uppercase
+        'Α' => ([0b01110, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Β' => ([0b11110, 0b11011, 0b11110, 0b11011, 0b11110, 0], 5),
+        'Γ' => ([0b11111, 0b11000, 0b11000, 0b11000, 0b11000, 0], 5),
+        'Δ' => ([0b00100, 0b01010, 0b10001, 0b10001, 0b11111, 0], 5),
+        'Ε' => ([0b11111, 0b11000, 0b11110, 0b11000, 0b11111, 0], 5),
+        'Ζ' => ([0b11111, 0b00110, 0b01100, 0b11000, 0b11111, 0], 5),
+        'Η' => ([0b11011, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Θ' => ([0b01110, 0b10001, 0b11111, 0b10001, 0b01110, 0], 5),
+        'Ι' => ([0b01110, 0b00100, 0b00100, 0b00100, 0b01110, 0], 4),
+        'Κ' => ([0b11011, 0b11110, 0b11100, 0b11110, 0b11011, 0], 5),
+        'Λ' => ([0b00100, 0b01010, 0b11011, 0b11011, 0b11011, 0], 5),
+        'Μ' => ([0b10001, 0b11011, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Ν' => ([0b11011, 0b11111, 0b11111, 0b11011, 0b11011, 0], 5),
+        'Ξ' => ([0b11111, 0, 0b01110, 0, 0b11111, 0], 5),
+        'Ο' => ([0b01110, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
+        'Π' => ([0b11111, 0b11011, 0b11011, 0b11011, 0b11011, 0], 5),
+        'Ρ' => ([0b11110, 0b11011, 0b11110, 0b11000, 0b11000, 0], 5),
+        'Σ' => ([0b11111, 0b01100, 0b00110, 0b01100, 0b11111, 0], 5),
+        'Τ' => ([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0], 5),
+        'Υ' => ([0b11011, 0b01110, 0b00100, 0b00100, 0b00100, 0], 5),
+        'Φ' => ([0b00100, 0b01110, 0b10101, 0b10101, 0b01110, 0b00100], 5),
+        'Χ' => ([0b11011, 0b01110, 0b00100, 0b01110, 0b11011, 0], 5),
+        'Ψ' => ([0b10101, 0b10101, 0b01110, 0b00100, 0b00100, 0], 5),
+        'Ω' => ([0b01110, 0b11011, 0b10001, 0b01010, 0b11011, 0], 5),
+
+        // Greek Lowercase
+        'α' => ([0, 0b01101, 0b10010, 0b10010, 0b01101, 0], 5),
+        'β' => ([0b01110, 0b10011, 0b11110, 0b10011, 0b11110, 0b10000], 5),
+        'γ' => ([0, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100], 5),
+        'δ' => ([0b01110, 0b01000, 0b01110, 0b10011, 0b01110, 0], 5),
+        'ε' => ([0, 0b01111, 0b11000, 0b01110, 0b01111, 0], 5),
+        'ζ' => ([0b01111, 0b00100, 0b01100, 0b01000, 0b00110, 0b00010], 5),
+        'η' => ([0, 0b11110, 0b11011, 0b11011, 0b11011, 0b00011], 5),
+        'θ' => ([0b01110, 0b10001, 0b11111, 0b10001, 0b01110, 0], 5),
+        'ι' => ([0, 0b01100, 0b01100, 0b01100, 0b00110, 0], 3),
+        'κ' => ([0, 0b11011, 0b11110, 0b11110, 0b11011, 0], 5),
+        'λ' => ([0b01000, 0b00100, 0b01110, 0b10010, 0b10001, 0], 5),
+        'μ' => ([0, 0b11011, 0b11011, 0b11011, 0b11110, 0b10000], 5),
+        'ν' => ([0, 0b11011, 0b11011, 0b01110, 0b00100, 0], 5),
+        'ξ' => ([0b01111, 0b01000, 0b01110, 0b01000, 0b00110, 0b00010], 5),
+        'ο' => ([0, 0b01110, 0b11011, 0b11011, 0b01110, 0], 5),
+        'π' => ([0, 0b11111, 0b01010, 0b01010, 0b01011, 0], 5),
+        'ρ' => ([0, 0b01110, 0b11011, 0b11110, 0b11000, 0b11000], 5),
+        'σ' => ([0, 0b01111, 0b11010, 0b11010, 0b01100, 0], 5),
+        'ς' => ([0, 0b01111, 0b11000, 0b01110, 0b00011, 0b00110], 5),
+        'τ' => ([0, 0b11111, 0b00100, 0b00100, 0b00110, 0], 5),
+        'υ' => ([0, 0b11011, 0b11011, 0b11011, 0b01110, 0], 5),
+        'φ' => ([0, 0b01110, 0b10101, 0b01110, 0b00100, 0b00100], 5),
+        'χ' => ([0, 0b11011, 0b01110, 0b01110, 0b11011, 0b10001], 5),
+        'ψ' => ([0, 0b10101, 0b10101, 0b01110, 0b00100, 0b00100], 5),
+        'ω' => ([0, 0b10001, 0b10101, 0b10101, 0b01010, 0], 5),
+
+        _ => return None,
+    };
+
+    Some(res)
 }
 
-/// Rasterizes a text line into a `(width_sub, 8)` sub-pixel opacity grid
-fn rasterize_line_subpixels(text: &str, max_sub_w: usize) -> (Vec<f32>, usize) {
+/// Rasterizes a text line into a `(max_sub_w, sub_h)` sub-pixel opacity grid
+fn rasterize_line_subpixels_with_cache(
+    text: &str,
+    max_sub_w: usize,
+    sub_h: usize,
+    glyph_cache: &mut GlyphFallbackCache,
+) -> (Vec<f32>, usize) {
     let mut cursor_x = 2usize;
-    let mut grid = vec![0.0_f32; max_sub_w * SUB_H];
+    let mut grid = vec![0.0_f32; max_sub_w * sub_h];
+    let bitmap_y_offset = (sub_h.saturating_sub(6)) / 2;
 
     for ch in text.chars() {
-        let (rows, advance) = glyph_bitmap_5x6(ch);
-        if cursor_x + advance + 2 >= max_sub_w {
-            break;
-        }
-        for (ry, &bits) in rows.iter().enumerate() {
-            let gy = ry + 1;
-            for rx in 0..5usize {
-                if (bits >> (4 - rx)) & 1 == 1 {
-                    let gx = cursor_x + rx;
-                    if gx < max_sub_w && gy < SUB_H {
-                        grid[gy * max_sub_w + gx] = 1.0;
+        if let Some((rows, advance)) = glyph_bitmap_5x6(ch) {
+            if cursor_x + advance + 2 >= max_sub_w {
+                break;
+            }
+            for (ry, &bits) in rows.iter().enumerate() {
+                let gy = ry + bitmap_y_offset;
+                if gy >= sub_h {
+                    continue;
+                }
+                for rx in 0..5usize {
+                    if (bits >> (4 - rx)) & 1 == 1 {
+                        let gx = cursor_x + rx;
+                        if gx < max_sub_w {
+                            grid[gy * max_sub_w + gx] = 1.0;
+                        }
                     }
                 }
             }
+            cursor_x += advance + 1;
+        } else if let Some(g) = glyph_cache.get_or_rasterize(ch, sub_h) {
+            if cursor_x + g.advance + 2 >= max_sub_w {
+                break;
+            }
+            for ry in 0..g.height {
+                let gy_i = g.top_y + (ry as isize);
+                if gy_i < 0 || gy_i >= sub_h as isize {
+                    continue;
+                }
+                let gy = gy_i as usize;
+                for rx in 0..g.width {
+                    let gx_i = (cursor_x as isize) + g.left_x + (rx as isize);
+                    if gx_i < 0 || gx_i >= max_sub_w as isize {
+                        continue;
+                    }
+                    let a = g.alpha[ry * g.width + rx];
+                    if a > 0.01 {
+                        let idx = gy * max_sub_w + (gx_i as usize);
+                        grid[idx] = grid[idx].max(a);
+                    }
+                }
+            }
+            cursor_x += g.advance + 1;
+        } else {
+            // Ultimate fallback glyph if no system font supplies `ch`
+            let fallback_rows = [0u8, 0b01110, 0b01110, 0b01110, 0, 0];
+            let advance = 4;
+            if cursor_x + advance + 2 >= max_sub_w {
+                break;
+            }
+            for (ry, &bits) in fallback_rows.iter().enumerate() {
+                let gy = ry + bitmap_y_offset;
+                if gy >= sub_h {
+                    continue;
+                }
+                for rx in 0..5usize {
+                    if (bits >> (4 - rx)) & 1 == 1 {
+                        let gx = cursor_x + rx;
+                        if gx < max_sub_w {
+                            grid[gy * max_sub_w + gx] = 1.0;
+                        }
+                    }
+                }
+            }
+            cursor_x += advance + 1;
         }
-        cursor_x += advance + 1;
     }
 
     let used_w = (cursor_x + 2).min(max_sub_w);
     (grid, used_w)
+}
+
+#[cfg(test)]
+fn rasterize_line_subpixels(text: &str, max_sub_w: usize) -> (Vec<f32>, usize) {
+    let mut cache = GlyphFallbackCache::default();
+    rasterize_line_subpixels_with_cache(text, max_sub_w, DEFAULT_SUB_H, &mut cache)
 }
 
 /// Applies an in-place 2D separable Gaussian blur filter over the sub-pixel grid.
@@ -408,10 +931,10 @@ pub fn render_synced_lyrics(
     }
 
     let avail_cols = area.width.saturating_sub(4) as usize;
-    let wrap_chars = (avail_cols / 3).clamp(14, 34);
     let max_sub_w = avail_cols * 2;
 
-    scroll.ensure_layout(lyrics, wrap_chars, max_sub_w);
+    scroll.ensure_layout(lyrics, max_sub_w);
+    let sub_line_rows = scroll.sub_line_rows.max(4);
 
     let active_idx = lyrics.active_line_index(params.position).unwrap_or(0);
     let target_virtual_y = scroll
@@ -435,10 +958,10 @@ pub fn render_synced_lyrics(
 
         for (sub_i, sub_line) in entry.sub_lines.iter().enumerate() {
             let rel_rows =
-                (entry_virtual_y + (sub_i as i32 * SUB_LINE_ROWS) as f32) - smooth_virtual_y;
+                (entry_virtual_y + (sub_i as i32 * sub_line_rows) as f32) - smooth_virtual_y;
             let top_screen_y_i32 = (anchor_screen_y as i32) + (rel_rows.round() as i32);
 
-            if top_screen_y_i32 + SUB_LINE_ROWS < (area.y as i32 + 1)
+            if top_screen_y_i32 + sub_line_rows < (area.y as i32 + 1)
                 || top_screen_y_i32 >= (area.bottom() as i32 - 1)
             {
                 continue;
@@ -469,7 +992,7 @@ pub fn render_synced_lyrics(
             let used_cells_w = sub_line.used_sub_w.div_ceil(2);
             let start_x = area.x + 2;
 
-            for cell_row in 0..4i32 {
+            for cell_row in 0..sub_line_rows {
                 let sy_i32 = top_screen_y_i32 + cell_row;
                 if sy_i32 < (area.y as i32 + 1) || sy_i32 >= (area.bottom() as i32 - 1) {
                     continue;
@@ -519,6 +1042,7 @@ fn render_compact_fallback(
     let center_y = area.y + area.height / 2;
     let white_ok = rgb_to_oklab(255, 255, 255);
     let inactive_ok = rgb_to_oklab(175, 172, 180);
+    let max_cols = area.width.saturating_sub(3) as usize;
 
     for (idx, line) in params.lyrics.lines.iter().enumerate() {
         let rel = (idx as f32) - smooth_center;
@@ -536,22 +1060,15 @@ fn render_compact_fallback(
         let eff_fade = 1.0 - (1.0 - fade) * params.opacity;
         let base_ok = if is_active { white_ok } else { inactive_ok };
 
-        for (i, ch) in line.text.chars().enumerate() {
-            let sx = area.x + 2 + i as u16;
-            if sx >= area.right() {
-                break;
-            }
-            let bg_ok = params.bg.oklab_at(sx, sy);
-            let (r, g, b) = oklab_to_rgb(lerp_oklab(base_ok, bg_ok, eff_fade));
-            if let Some(cell) = buf.cell_mut((sx, sy)) {
-                cell.set_char(ch);
-                let mut style = Style::default().fg(Color::Rgb(r, g, b));
-                if is_active {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
-                cell.set_style(style);
-            }
+        let (shown, _) = fit_text_to_cols(&line.text, max_cols);
+        let start_x = area.x + 2;
+        let bg_ok = params.bg.oklab_at(start_x, sy);
+        let (r, g, b) = oklab_to_rgb(lerp_oklab(base_ok, bg_ok, eff_fade));
+        let mut style = Style::default().fg(Color::Rgb(r, g, b));
+        if is_active {
+            style = style.add_modifier(Modifier::BOLD);
         }
+        buf.set_stringn(start_x, sy, &shown, max_cols, style);
     }
 }
 
@@ -573,15 +1090,72 @@ mod tests {
     }
 
     #[test]
+    fn test_wrap_lyric_text_handles_cjk_without_spaces_and_kinsoku() {
+        let line = "夢ならばどれほどよかったでしょう。まだあなたのことを夢にみる";
+        let wrapped = wrap_lyric_text(line, 20);
+        assert!(wrapped.len() >= 2, "Japanese line should wrap into multiple lines");
+        for sub in &wrapped {
+            assert!(
+                !sub.starts_with('。') && !sub.starts_with('、'),
+                "Line should not begin with forbidden punctuation: {sub}"
+            );
+        }
+    }
+
+    #[test]
     fn test_subpixel_rasterizer_and_gaussian_blur() {
         let (mut grid, used_w) = rasterize_line_subpixels("Midnight", 120);
-        let mut temp = vec![0.0_f32; 120 * SUB_H];
+        let mut temp = vec![0.0_f32; 120 * DEFAULT_SUB_H];
         assert!(used_w > 20);
         let peak_before = grid.iter().copied().fold(0.0_f32, f32::max);
         assert_eq!(peak_before, 1.0);
 
-        apply_gaussian_blur_in_place(&mut grid, &mut temp, 120, SUB_H, 0.8);
+        apply_gaussian_blur_in_place(&mut grid, &mut temp, 120, DEFAULT_SUB_H, 0.8);
         let peak_after = grid.iter().copied().fold(0.0_f32, f32::max);
         assert!(peak_after > 0.2 && peak_after < 0.95);
+    }
+
+    #[test]
+    fn test_cyrillic_extended_latin_and_greek_use_native_bitmaps() {
+        for sample in [
+            "Привет, мир! Ёлка и жизнь",
+            "Año ñoño Straße Łódź Ğüşİı Øresund",
+            "Μουσική και ψυχή Ωμέγα",
+        ] {
+            for ch in sample.chars() {
+                assert!(
+                    glyph_bitmap_5x6(ch).is_some(),
+                    "Missing native 5x6 bitmap for '{ch}'"
+                );
+            }
+            let (grid, used_w) = rasterize_line_subpixels(sample, 240);
+            assert!(used_w > 20);
+            assert!(grid.iter().copied().any(|v| v > 0.5));
+        }
+    }
+
+    #[test]
+    fn test_cjk_and_hangul_rasterization_and_adaptive_height() {
+        let lyrics = SyncedLyrics::new(
+            "Test".to_string(),
+            vec![crate::media::lyrics::LyricLine {
+                start: Duration::ZERO,
+                end: Duration::from_secs(4),
+                text: "夜に駆ける 사랑해 你好".to_string(),
+                words: Vec::new(),
+                is_chorus: false,
+            }],
+        );
+        let mut scroll = LyricsScrollState::default();
+        scroll.ensure_layout(&lyrics, 120);
+        assert_eq!(scroll.cached_sub_h, CJK_SUB_H);
+        assert_eq!(scroll.sub_line_rows, 5);
+        assert!(!scroll.entries[0].sub_lines.is_empty());
+        let peak = scroll.entries[0].sub_lines[0]
+            .sharp_grid
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 0.5, "CJK/Hangul line should rasterize visible pixels");
     }
 }
