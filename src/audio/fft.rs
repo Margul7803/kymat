@@ -136,8 +136,7 @@ impl FftAnalyzer {
 
         for (band_idx, &(b0, b1)) in self.band_edges.iter().enumerate() {
             let mut max_norm_sqr = 0.0_f32;
-            for bin in b0..b1 {
-                let c = self.scratch[bin];
+            for &c in &self.scratch[b0..b1] {
                 let norm_sqr = c.re * c.re + c.im * c.im;
                 max_norm_sqr = max_norm_sqr.max(norm_sqr);
             }
