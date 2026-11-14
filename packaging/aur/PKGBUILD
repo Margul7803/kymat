@@ -25,7 +25,7 @@ optdepends=(
   'foot: default Wayland terminal integration'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('b91f6bd122ed3c0bad58bb2c1d78c453c3c1339e0883878596f2268718b6ac87')
 
 prepare() {
   cd "$pkgname-$pkgver"

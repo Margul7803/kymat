@@ -20,6 +20,6 @@ pkgbase = kymat
 	optdepends = foot: default Wayland terminal integration
 	options = !lto
 	source = kymat-0.1.0.tar.gz::https://github.com/Margul7803/kymat/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = b91f6bd122ed3c0bad58bb2c1d78c453c3c1339e0883878596f2268718b6ac87
 
 pkgname = kymat
